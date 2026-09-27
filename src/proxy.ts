@@ -331,7 +331,7 @@ function getForwardHeaders(config: ModelConfig, options?: UpstreamRequestOptions
 }
 
 export function resolveProxyUrl(config: ModelConfig): string | undefined {
-  return config.proxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  return config.proxy || config.provider_proxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 }
 
 const upstreamAgents = {

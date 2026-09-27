@@ -56,7 +56,7 @@ models:
     image: true # optional, default true; only effective for openai-chat provider
     ttfb_timeout: 3000 # optional, overrides server.ttfb_timeout
     allow_h2: false # optional, default false; enable HTTP/2 ALPN for this upstream
-    proxy: http://127.0.0.1:7890 # optional, overrides HTTPS_PROXY/HTTP_PROXY for this model
+    proxy: http://127.0.0.1:7890 # optional, overrides providers[*].proxy and HTTPS_PROXY/HTTP_PROXY for this model
     headers:
       user-agent: nanollm
     body:
@@ -300,28 +300,34 @@ models:
 - 图片接口只能命中 `provider: openai-image` 的模型；如果请求的模型（或 fallback 分组里的候选模型）不是该 provider，会返回 `cannot handle image requests` 错误。
 - 图片请求同样参与 fallback 兜底和 `/status` 健康统计，行为与文本接口一致。
 
-### 模型级 HTTP proxy
+### HTTP proxy
 
-`models[*].proxy` 可以为单个模型配置请求下游供应商时使用的 HTTP proxy URL：
+`models[*].proxy` 可以为单个模型配置请求下游供应商时使用的 HTTP proxy URL；`providers[*].proxy` 可以为引用该供应商（`custom_provider`）的所有模型配置默认 proxy：
 
 ```yaml
-models:
-  - name: claude-sonnet
+providers:
+  - name: my-provider
     provider: anthropic
     base_url: https://example.com/v1
     api_key: YOUR_KEY
-    model: claude-sonnet-4-6
     proxy: http://127.0.0.1:7890
+
+models:
+  - name: claude-sonnet
+    custom_provider: my-provider
+    model: claude-sonnet-4-6
+    proxy: http://127.0.0.1:7891 # optional, overrides providers[*].proxy
 ```
 
 代理优先级为：
 
 1. `models[*].proxy`
-2. `HTTPS_PROXY`
-3. `HTTP_PROXY`
-4. 直连
+2. `providers[*].proxy`（仅对使用 `custom_provider` 的模型生效）
+3. `HTTPS_PROXY`
+4. `HTTP_PROXY`
+5. 直连
 
-当 `proxy` 为空字符串或未配置时，会继续回退到环境变量；当前支持 `http://` 和 `https://` 代理 URL。
+当 `proxy` 为空字符串或未配置时，会继续回退到下一级；当前支持 `http://` 和 `https://` 代理 URL。管理页面的供应商和模型卡片中都可以直接编辑 `proxy`。
 
 ### 模型名通配符 `*`
 

@@ -49,6 +49,8 @@ export interface RecordEntry {
   requestId: string;
   key: string;
   createdAt: number;
+  firstByteAt?: number;
+  completedAt?: number;
   stream: boolean;
   clientRequest: {
     path: string;
@@ -470,6 +472,7 @@ class RecordStore implements RecordStoreLike {
     const body = normalizeBody(input.body);
     record.clientResponse.body = body.value;
     record.clientResponse.truncated = body.truncated;
+    record.firstByteAt ??= Date.now();
     record.clientRequest.status = "success";
   }
 
@@ -479,6 +482,7 @@ class RecordStore implements RecordStoreLike {
     const text = appendTextBody(record.clientResponse.body, input.chunk);
     record.clientResponse.body = text.value;
     record.clientResponse.truncated = text.truncated;
+    record.firstByteAt ??= Date.now();
     record.clientRequest.status = "success";
   }
 
@@ -489,7 +493,10 @@ class RecordStore implements RecordStoreLike {
     record.clientRequest.status = "failure";
   }
 
-  finalizeRequest(_input: { requestId?: string }) {}
+  finalizeRequest(input: { requestId?: string }) {
+    const record = this.getMutable(input.requestId);
+    if (record) record.completedAt ??= Date.now();
+  }
 }
 
 type RecordRow = {
@@ -1011,6 +1018,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const body = normalizeBody(input.body);
       record.clientResponse.body = body.value;
       record.clientResponse.truncated = body.truncated;
+      record.firstByteAt ??= Date.now();
       record.clientRequest.status = "success";
     });
   }
@@ -1020,6 +1028,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const text = appendTextBody(record.clientResponse.body, input.chunk);
       record.clientResponse.body = text.value;
       record.clientResponse.truncated = text.truncated;
+      record.firstByteAt ??= Date.now();
       record.clientRequest.status = "success";
     });
   }
@@ -1037,6 +1046,7 @@ class SqliteRecordStore implements RecordStoreLike {
     const key = getRecordKey(id);
     const record = this.activeRecords.get(key);
     if (!record) return;
+    record.completedAt ??= Date.now();
     this.activeRecords.delete(key);
     this.persistQueue.set(key, record);
     this.scheduleFlush();

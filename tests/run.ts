@@ -25,6 +25,7 @@ import {
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
+import { buildAdminConfigForm, buildYamlTextFromAdminForm } from "../src/admin-config-form.js";
 import { buildModelTestRequest, extractModelTestReply } from "../src/model-test.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
@@ -2930,6 +2931,77 @@ models:
   }, invalidProxy === "not-a-url" ? "'models.alpha.proxy' must be a valid URL" : "'models.alpha.proxy' must use http:// or https://");
 }
 
+runThrows("config rejects invalid provider proxy", () => {
+  parseConfigText(`
+providers:
+  - name: p1
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+    proxy: socks://127.0.0.1:1080
+models:
+  - name: alpha
+    custom_provider: p1
+    model: upstream-alpha
+`);
+}, "'providers.p1.proxy' must use http:// or https://");
+
+run("model proxy overrides custom provider proxy, which overrides environment proxy", () => {
+  const previousHTTPSProxy = process.env.HTTPS_PROXY;
+  const previousHTTPProxy = process.env.HTTP_PROXY;
+  try {
+    process.env.HTTPS_PROXY = "http://env-https-proxy.example:8080";
+    delete process.env.HTTP_PROXY;
+    const config = parseConfigText(`
+providers:
+  - name: with-proxy
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+    proxy: http://provider-proxy.example:7890
+  - name: without-proxy
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+  - name: sub
+    provider: openai-subscription
+    proxy: http://sub-proxy.example:7890
+models:
+  - name: model-level
+    custom_provider: with-proxy
+    model: m
+    proxy: http://model-proxy.example:7890
+  - name: provider-level
+    custom_provider: with-proxy
+    model: m
+  - name: env-level
+    custom_provider: without-proxy
+    model: m
+  - name: subscription-level
+    custom_provider: sub
+    model: m
+  - name: direct
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+    model: m
+`);
+    const byName = (name: string) => config.models.find((model) => model.name === name)!;
+    assert.equal(resolveProxyUrl(byName("model-level")), "http://model-proxy.example:7890");
+    assert.equal(resolveProxyUrl(byName("provider-level")), "http://provider-proxy.example:7890");
+    assert.equal(resolveProxyUrl(byName("env-level")), "http://env-https-proxy.example:8080");
+    assert.equal(resolveProxyUrl(byName("subscription-level")), "http://sub-proxy.example:7890");
+    assert.equal(resolveProxyUrl(byName("direct")), "http://env-https-proxy.example:8080");
+    assert.equal(config.providers[1].proxy, undefined);
+    assert.ok(!("proxy" in config.providers[1]));
+  } finally {
+    if (previousHTTPSProxy === undefined) delete process.env.HTTPS_PROXY;
+    else process.env.HTTPS_PROXY = previousHTTPSProxy;
+    if (previousHTTPProxy === undefined) delete process.env.HTTP_PROXY;
+    else process.env.HTTP_PROXY = previousHTTPProxy;
+  }
+});
+
 run("model proxy has higher priority than environment proxy", () => {
   const previousHTTPSProxy = process.env.HTTPS_PROXY;
   const previousHTTPProxy = process.env.HTTP_PROXY;
@@ -4611,6 +4683,114 @@ await runAsync("record store resets on start and supports full request id lookup
   await stopRecording();
 });
 
+await runAsync("record store tracks client first byte and completion time", async () => {
+  await startRecording();
+  const requestId = "timing01-3456-7890-abcd-ef1234567890";
+  beginRecordedRequest({ requestId, path: "/v1/chat/completions", headers: {}, body: { model: "alpha" }, stream: true });
+  let record = await getRecordedRequest(requestId);
+  assert.equal(record?.firstByteAt, undefined);
+  assert.equal(record?.completedAt, undefined);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  appendRecordedClientResponseBody({ requestId, chunk: "data: one\n\n" });
+  record = await getRecordedRequest(requestId);
+  const firstByteAt = record?.firstByteAt;
+  assert.ok(firstByteAt && firstByteAt - record!.createdAt >= 10);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  appendRecordedClientResponseBody({ requestId, chunk: "data: two\n\n" });
+  finalizeRecordedRequest({ requestId });
+  record = await getRecordedRequest(requestId);
+  assert.equal(record?.firstByteAt, firstByteAt);
+  assert.ok(record?.completedAt && record.completedAt - firstByteAt >= 10);
+  await stopRecording();
+});
+
+run("record page shows first byte latency and total duration", () => {
+  const html = renderRecordPage({ enabled: true, capturedCount: 0, limit: 10, size: 0, recentKeys: [] } as any);
+  assert.match(html, /\["ttfb", formatElapsed\(record\.createdAt, record\.firstByteAt\)\]/);
+  assert.match(html, /\["duration", formatElapsed\(record\.createdAt, record\.completedAt\)\]/);
+});
+
+run("admin config form exposes body_expression and response_expression as dedicated fields", () => {
+  const form = buildAdminConfigForm(`
+models:
+  - name: alpha
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+    model: upstream-alpha
+    image: false
+    body_expression: |
+      ({ ...body, extra: true })
+    responseExpression: "({ ...response, checked: true })"
+`);
+  const model = form.models[0];
+  assert.match(model.body_expression ?? "", /extra: true/);
+  assert.match(model.response_expression ?? "", /checked: true/);
+  assert.deepEqual(model.extras, { image: false });
+
+  model.body_expression = "({\n  ...body,\n  edited: true,\n})\n";
+  model.response_expression = "   ";
+  const yamlText = buildYamlTextFromAdminForm(form);
+  const config = parseConfigText(yamlText);
+  assert.equal(config.models[0].bodyExpression, "({\n  ...body,\n  edited: true,\n})");
+  assert.equal(config.models[0].responseExpression, undefined);
+  assert.doesNotMatch(yamlText, /responseExpression|response_expression/);
+  assert.equal((config.models[0] as any).image, false);
+
+  const legacy = buildYamlTextFromAdminForm({ ...form, models: [{ ...model, body_expression: "", extras: { bodyExpression: "body" } }] });
+  assert.match(legacy, /body_expression: body/);
+  assert.doesNotMatch(legacy, /bodyExpression/);
+});
+
+run("admin config form preserves provider, model and fallback order", () => {
+  const yamlText = buildYamlTextFromAdminForm({
+    server: { port: "", ttfb_timeout: "" },
+    record: { max_size: "" },
+    providers: [
+      { name: "p2", provider: "openai-chat", base_url: "https://b/v1", api_key: "k" },
+      { name: "p1", provider: "openai-chat", base_url: "https://a/v1", api_key: "k" },
+    ],
+    models: ["m3", "m1", "m2"].map((name) => ({ name, connection_mode: "direct" as const, provider: "openai-chat", custom_provider: "", base_url: "https://x/v1", api_key: "k", model: name })),
+    fallbackGroups: [{ name: "g2", members: ["m2", "m1"] }, { name: "g1", members: ["m3"] }],
+  });
+  const reparsed = buildAdminConfigForm(yamlText);
+  assert.deepEqual(reparsed.providers.map((p) => p.name), ["p2", "p1"]);
+  assert.deepEqual(reparsed.models.map((m) => m.name), ["m3", "m1", "m2"]);
+  assert.deepEqual(reparsed.fallbackGroups.map((g) => g.name), ["g2", "g1"]);
+});
+
+run("admin config form exposes provider and model proxy as dedicated fields", () => {
+  const form = buildAdminConfigForm(`
+providers:
+  - name: p1
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: k
+    proxy: http://provider-proxy.example:7890
+models:
+  - name: alpha
+    custom_provider: p1
+    model: upstream-alpha
+    proxy: http://model-proxy.example:7890
+  - name: beta
+    custom_provider: p1
+    model: upstream-beta
+`);
+  assert.equal(form.providers[0].proxy, "http://provider-proxy.example:7890");
+  assert.equal(form.models[0].proxy, "http://model-proxy.example:7890");
+  assert.equal(form.models[1].proxy, "");
+  assert.deepEqual(form.models[0].extras, {});
+
+  form.providers[0].proxy = " http://edited-provider-proxy.example:7890 ";
+  form.models[0].proxy = "";
+  const yamlText = buildYamlTextFromAdminForm(form);
+  const config = parseConfigText(yamlText);
+  assert.equal(config.providers[0].proxy, "http://edited-provider-proxy.example:7890");
+  assert.equal(config.models[0].proxy, undefined);
+  assert.equal(resolveProxyUrl(config.models[0]), "http://edited-provider-proxy.example:7890");
+  assert.doesNotMatch(yamlText, /model-proxy/);
+});
+
 await runAsync("record store deduplicates image data URLs and restores them for replay", async () => {
   await startRecording({ maxSize: 3 });
   const image = `data:image/png;base64,${"a".repeat(1024 * 1024)}`;
@@ -4742,6 +4922,8 @@ await runAsync("sqlite record store persists records and trims when max size shr
     assert.equal(record?.clientRequest.actualModel, "fallback-alpha");
     assert.equal(record?.attempts[0].response.body, "data: one\n\n");
     assert.equal(record?.clientResponse.body, "data: client\n\n");
+    assert.ok(record?.firstByteAt && record.firstByteAt >= record.createdAt);
+    assert.ok(record?.completedAt && record.completedAt >= record.firstByteAt!);
     assert.equal((await getRecordSummary()).recentKeys[0]?.actualModel, "fallback-alpha");
 
     for (let index = 0; index < 3; index += 1) {
@@ -4887,6 +5069,14 @@ await runAsync("status page renders fallback group priority panel without top hi
   assert.match(html, /id="groups"/);
   assert.match(html, /id="range-total"/);
   assert.match(html, /formatTokenM/);
+  const tokenFormatterSource = html.match(/function formatToken\(value\) \{[\s\S]*?\n\s*function formatSpeed/)?.[0].replace(/function formatSpeed$/, "");
+  assert.ok(tokenFormatterSource);
+  const formatTokenInPage = new Function(`${tokenFormatterSource}; return formatToken;`)() as (value: number) => string;
+  assert.equal(formatTokenInPage(12_345), "12.3K");
+  assert.equal(formatTokenInPage(999_000), "999K");
+  assert.equal(formatTokenInPage(999_600), "1.00M");
+  assert.equal(formatTokenInPage(1_234_567), "1.23M");
+  assert.equal(formatTokenInPage(45_600_000), "45.6M");
   assert.match(html, /renderRangeTotal/);
   assert.match(html, /"fallbackGroups":\[\{"name":"group-a","members":\["beta","alpha"\]\}\]/);
   assert.match(html, /renderFallbackGroups/);
@@ -5078,6 +5268,14 @@ run("admin page relies on server cookie auth instead of client-side token storag
   assert.match(html, /你只需要回复ok/);
   assert.match(html, /删除供应商/);
   assert.match(html, /不能覆盖 name\/provider\/base_url\/api_key\/model/);
+  assert.match(html, /function bindExpressionField/);
+  assert.match(html, /bindExpressionField\(grid, model, "body_expression"/);
+  assert.match(html, /bindExpressionField\(grid, model, "response_expression"/);
+  assert.match(html, /"bodyExpression", "responseExpression"\]\)/);
+  assert.match(html, /function attachCardDrag/);
+  assert.match(html, /attachCardDrag\(card, head, "provider", \(\) => formState\.providers, provider\)/);
+  assert.match(html, /attachCardDrag\(card, head, "model", \(\) => formState\.models, model\)/);
+  assert.match(html, /attachCardDrag\(card, head, "fallback", \(\) => formState\.fallbackGroups, group\)/);
   assert.match(html, /"image":false/);
   assert.match(html, /"X-Test":"ok"/);
 });

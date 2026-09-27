@@ -448,6 +448,7 @@ const SCRIPT = String.raw`
 
       function formatToken(value) {
         if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0K";
+        if (value >= 999500) return formatTokenM(value);
         const k = value / 1000;
         return k >= 100 ? Math.round(k) + "K" : k.toFixed(1) + "K";
       }

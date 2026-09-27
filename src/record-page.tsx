@@ -1586,6 +1586,12 @@ const SCRIPT = String.raw`
         return [error.message, ...details].filter((value, index, values) => values.indexOf(value) === index).join(": ");
       }
 
+      function formatElapsed(start, end) {
+        if (!start || !end) return "-";
+        const ms = end - start;
+        return ms >= 1000 ? (ms / 1000).toFixed(2) + " s (" + ms + " ms)" : ms + " ms";
+      }
+
       function renderRecord(record) {
         contentEl.textContent = "";
 
@@ -1596,6 +1602,8 @@ const SCRIPT = String.raw`
           ["path", record.clientRequest?.path],
           ["stream", record.stream],
           ["createdAt", record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "-"],
+          ["ttfb", formatElapsed(record.createdAt, record.firstByteAt)],
+          ["duration", formatElapsed(record.createdAt, record.completedAt)],
           ["error", formatRecordedError(record.error)],
         ]);
         baseSection.appendChild(createReplayControls(record));

@@ -357,7 +357,32 @@ const STYLE = /* css */ String.raw`
         border-color: rgba(143, 91, 51, 0.4);
         background: rgba(143, 91, 51, 0.08);
       }
+      .card.dragging {
+        opacity: 0.5;
+      }
+      .card.drag-over {
+        border-color: rgba(143, 91, 51, 0.55);
+        background: rgba(143, 91, 51, 0.08);
+      }
+      .card-head .drag-handle {
+        align-self: flex-start;
+        margin-top: 2px;
+      }
+      textarea.expression-input {
+        min-height: 120px;
+        resize: vertical;
+        font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        tab-size: 2;
+        white-space: pre;
+      }
       .drag-handle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        font-weight: 700;
         width: 38px;
         min-width: 38px;
         padding: 8px 0;
@@ -436,12 +461,13 @@ const SCRIPT = /* js */ String.raw`
       const INITIAL_PAYLOAD = __INITIAL_PAYLOAD__;
       const MODEL_PROVIDERS = ["openai-chat", "openai-responses", "anthropic", "openai-image"];
       const PROVIDERS = [...MODEL_PROVIDERS, "openai-subscription"];
-      const RESERVED_MODEL_EXTRA_KEYS = new Set(["name", "provider", "custom_provider", "base_url", "api_key", "model"]);
+      const RESERVED_MODEL_EXTRA_KEYS = new Set(["name", "provider", "custom_provider", "base_url", "api_key", "model", "proxy", "body_expression", "response_expression", "bodyExpression", "responseExpression"]);
       let saving = false;
       let dirty = false;
       let localIdCounter = 0;
       let pendingFocusTarget = null;
       let draggedMember = null;
+      let draggedCard = null;
 
       function nextId(prefix) {
         localIdCounter += 1;
@@ -466,6 +492,7 @@ const SCRIPT = /* js */ String.raw`
           },
           providers: (form.providers || []).map((provider) => ({
             ...provider,
+            proxy: provider.proxy || "",
             _id: nextId("provider"),
             _expanded: false,
           })),
@@ -473,6 +500,9 @@ const SCRIPT = /* js */ String.raw`
             ...model,
             _id: nextId("model"),
             connection_mode: model.connection_mode === "custom" ? "custom" : "direct",
+            proxy: model.proxy || "",
+            body_expression: model.body_expression || "",
+            response_expression: model.response_expression || "",
             _expanded: false,
             _advancedExpanded: false,
             extras: model.extras || {},
@@ -702,6 +732,85 @@ const SCRIPT = /* js */ String.raw`
         container.appendChild(field);
       }
 
+      function bindExpressionField(container, model, key, options) {
+        const field = document.createElement("div");
+        field.className = "field span-2";
+        const label = document.createElement("label");
+        label.textContent = key;
+        const textarea = document.createElement("textarea");
+        textarea.className = "expression-input";
+        textarea.spellcheck = false;
+        textarea.wrap = "off";
+        textarea.value = model[key] || "";
+        textarea.placeholder = options.placeholder;
+        textarea.setAttribute("data-expression-key", key);
+        textarea.addEventListener("keydown", (event) => {
+          if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+          event.preventDefault();
+          textarea.setRangeText("  ", textarea.selectionStart, textarea.selectionEnd, "end");
+          textarea.dispatchEvent(new Event("input"));
+        });
+        textarea.addEventListener("input", (event) => {
+          model[key] = event.target.value;
+          markDirty(true);
+        });
+        const helper = document.createElement("div");
+        helper.className = "helper";
+        helper.textContent = options.helper;
+        field.appendChild(label);
+        field.appendChild(textarea);
+        field.appendChild(helper);
+        container.appendChild(field);
+      }
+
+      function attachCardDrag(card, head, kind, getList, item) {
+        const handle = document.createElement("span");
+        handle.className = "drag-handle";
+        handle.textContent = "⋮⋮";
+        handle.title = "拖拽排序";
+        handle.setAttribute("role", "button");
+        handle.setAttribute("aria-label", "拖拽排序");
+        handle.draggable = true;
+        handle.addEventListener("dragstart", (event) => {
+          draggedCard = { kind, id: item._id };
+          card.classList.add("dragging");
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", item._id);
+            event.dataTransfer.setDragImage(card, 24, 24);
+          }
+        });
+        handle.addEventListener("dragend", () => {
+          draggedCard = null;
+          card.classList.remove("dragging");
+          document.querySelectorAll(".card.drag-over").forEach((element) => element.classList.remove("drag-over"));
+        });
+        card.addEventListener("dragover", (event) => {
+          if (!draggedCard || draggedCard.kind !== kind || draggedCard.id === item._id) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          card.classList.add("drag-over");
+        });
+        card.addEventListener("dragleave", (event) => {
+          if (event.relatedTarget && card.contains(event.relatedTarget)) return;
+          card.classList.remove("drag-over");
+        });
+        card.addEventListener("drop", (event) => {
+          if (!draggedCard || draggedCard.kind !== kind) return;
+          event.preventDefault();
+          card.classList.remove("drag-over");
+          const list = getList();
+          const fromIndex = list.findIndex((entry) => entry._id === draggedCard.id);
+          const toIndex = list.findIndex((entry) => entry._id === item._id);
+          draggedCard = null;
+          if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+          moveArrayItem(list, fromIndex, toIndex);
+          markDirty(true);
+          renderAll({ preserveScroll: true, scrollToFocus: false });
+        });
+        head.insertBefore(handle, head.firstChild);
+      }
+
       function bindAdvancedJsonField(container, model, index) {
         const field = document.createElement("div");
         field.className = "field span-2";
@@ -729,7 +838,7 @@ const SCRIPT = /* js */ String.raw`
 
         const helper = document.createElement("div");
         helper.className = "helper";
-        helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model。";
+        helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model/proxy 以及 body_expression/response_expression（请使用上方独立输入框）。";
         helper.hidden = !model._advancedExpanded;
 
         textarea.addEventListener("input", (event) => {
@@ -739,7 +848,7 @@ const SCRIPT = /* js */ String.raw`
             model.extras = parseAdvancedJson(value, getModelLabel(model, index));
             model._extrasError = "";
             helper.className = "helper";
-            helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model。";
+            helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model/proxy 以及 body_expression/response_expression（请使用上方独立输入框）。";
           } catch (error) {
             model._extrasError = error instanceof Error ? error.message : String(error);
             helper.className = "helper error";
@@ -914,6 +1023,7 @@ const SCRIPT = /* js */ String.raw`
             renderAll();
           }));
           head.appendChild(actions);
+          attachCardDrag(card, head, "provider", () => formState.providers, provider);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -938,6 +1048,13 @@ const SCRIPT = /* js */ String.raw`
             bindField(grid, "base_url", { value: provider.base_url, placeholder: "https://example.com/v1", onInput(value) { provider.base_url = value; markDirty(true); } });
             bindField(grid, "api_key", { value: provider.api_key, placeholder: "支持直接填 key 或环境变量占位符", onInput(value) { provider.api_key = value; markDirty(true); } });
           }
+          bindField(grid, "proxy", {
+            spanClass: "span-2",
+            value: provider.proxy || "",
+            placeholder: "http://127.0.0.1:7890",
+            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。",
+            onInput(value) { provider.proxy = value; markDirty(true); },
+          });
           body.appendChild(grid);
           card.appendChild(body);
           providersContainer.appendChild(card);
@@ -1120,6 +1237,13 @@ const SCRIPT = /* js */ String.raw`
             badge.title = formatExtrasDetail(model.extras);
             title.appendChild(badge);
           }
+          const expressionKeys = ["body_expression", "response_expression"].filter((key) => (model[key] || "").trim());
+          if (expressionKeys.length > 0) {
+            const badge = document.createElement("div");
+            badge.className = "pill neutral";
+            badge.textContent = expressionKeys.join(" · ");
+            title.appendChild(badge);
+          }
           toggleTop.appendChild(title);
           toggle.appendChild(toggleTop);
 
@@ -1157,6 +1281,7 @@ const SCRIPT = /* js */ String.raw`
             }),
           );
           head.appendChild(actions);
+          attachCardDrag(card, head, "model", () => formState.models, model);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -1242,6 +1367,24 @@ const SCRIPT = /* js */ String.raw`
               },
             });
           }
+          bindField(grid, "proxy", {
+            spanClass: "span-2",
+            value: model.proxy || "",
+            placeholder: "http://127.0.0.1:7890",
+            helper: "可选。该模型调用上游时使用的 HTTP proxy，优先级最高；留空则依次回退到供应商 proxy、HTTPS_PROXY/HTTP_PROXY。",
+            onInput(value) {
+              model.proxy = value;
+              markDirty(true);
+            },
+          });
+          bindExpressionField(grid, model, "body_expression", {
+            placeholder: "({\n  ...body,\n  temperature: 0.2,\n})",
+            helper: "可选。JS 表达式，变量 body 为最终上游请求体，需同步返回新的 body；留空表示不改写。",
+          });
+          bindExpressionField(grid, model, "response_expression", {
+            placeholder: "(() => {\n  if (response.model !== 'expected') throw new Error('unexpected model');\n  return response;\n})()",
+            helper: "可选。JS 表达式，变量 response 为上游 JSON/SSE 响应、headers 为只读的上游响应头，需返回新的 response；留空表示不改写。",
+          });
           bindAdvancedJsonField(grid, model, index);
           body.appendChild(grid);
 
@@ -1305,6 +1448,7 @@ const SCRIPT = /* js */ String.raw`
             }),
           );
           head.appendChild(headActions);
+          attachCardDrag(card, head, "fallback", () => formState.fallbackGroups, group);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -1574,6 +1718,9 @@ const SCRIPT = /* js */ String.raw`
           base_url: "",
           api_key: "",
           model: "",
+          proxy: "",
+          body_expression: "",
+          response_expression: "",
           extras: {},
           _advancedExpanded: false,
           _advancedJsonText: "{}",
@@ -1593,6 +1740,7 @@ const SCRIPT = /* js */ String.raw`
           provider: "openai-chat",
           base_url: "",
           api_key: "",
+          proxy: "",
         });
         pendingFocusTarget = "provider-name-" + id;
         markDirty(true);

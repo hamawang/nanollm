@@ -18,6 +18,7 @@ export interface ModelConfig {
   ttfb_timeout?: number;
   allow_h2?: boolean;
   proxy?: string;
+  provider_proxy?: string;
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
   bodyExpression?: string;
@@ -32,6 +33,7 @@ export interface CustomProviderConfig {
   provider: StreamFormat | "openai-subscription";
   base_url: string;
   api_key: string;
+  proxy?: string;
 }
 
 export interface ServerConfig {
@@ -218,13 +220,20 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
   const defaultTTFBTimeout = options?.ttfb_timeout ?? normalizeTimeout(document.server?.ttfb_timeout, "server.ttfb_timeout") ?? DEFAULT_TTFB_TIMEOUT;
   const recordMaxSize = options?.recordMaxSize ?? (normalizePositiveInteger(document.record?.max_size, "record.max_size") ?? DEFAULT_RECORD_MAX_SIZE);
   const authToken = normalizeOptionalString(options?.authToken ?? document.server?.auth?.token);
-  const providers = (document.providers ?? []).map((provider) => ({
-    ...provider,
-    name: String(provider.name || "").trim(),
-    provider: provider.provider,
-    base_url: String(provider.base_url || "").trim(),
-    api_key: resolveEnvVars(String(provider.api_key || "")),
-  }));
+  const providers = (document.providers ?? []).map((provider) => {
+    const name = String(provider.name || "").trim();
+    const proxy = normalizeProxyUrl(provider.proxy, `providers.${name || "<unknown>"}.proxy`);
+    const normalized: CustomProviderConfig = {
+      ...provider,
+      name,
+      provider: provider.provider,
+      base_url: String(provider.base_url || "").trim(),
+      api_key: resolveEnvVars(String(provider.api_key || "")),
+      proxy,
+    };
+    if (!proxy) delete normalized.proxy;
+    return normalized;
+  });
   const providerNames = new Set<string>();
   for (const provider of providers) {
     if (!provider.name) throw new Error("Provider config missing 'name'");
@@ -255,8 +264,8 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
     }
     const expanded = customProvider
       ? customProvider.provider === "openai-subscription"
-        ? { ...sourceModel, custom_provider: customProviderName, subscription_provider: customProviderName, provider: "openai-responses", base_url: "https://chatgpt.com/backend-api/codex", api_key: "" }
-        : { ...sourceModel, custom_provider: customProviderName, provider: customProvider.provider, base_url: customProvider.base_url, api_key: customProvider.api_key }
+        ? { ...sourceModel, custom_provider: customProviderName, subscription_provider: customProviderName, provider: "openai-responses", base_url: "https://chatgpt.com/backend-api/codex", api_key: "", ...(customProvider.proxy ? { provider_proxy: customProvider.proxy } : {}) }
+        : { ...sourceModel, custom_provider: customProviderName, provider: customProvider.provider, base_url: customProvider.base_url, api_key: customProvider.api_key, ...(customProvider.proxy ? { provider_proxy: customProvider.proxy } : {}) }
       : { ...sourceModel, api_key: resolveEnvVars(String(sourceModel.api_key || "")) };
     return normalizeModelConfig(expanded as ModelConfig, defaultTTFBTimeout);
   });
