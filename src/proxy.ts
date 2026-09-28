@@ -62,6 +62,12 @@ export function getUpstreamURLForPath(config: ModelConfig, imageOperation?: Open
   }
 }
 
+export function getAlphaSearchURL(config: ModelConfig): string {
+  if (config.subscription_provider) return `${SUBSCRIPTION_URL}/alpha/search`;
+  const base = config.base_url.replace(/\/+$/, "");
+  return `${base}/alpha/search`;
+}
+
 // ─── Auth Headers ───────────────────────────────────────────────────────────
 
 function getAuthHeaders(config: ModelConfig): Record<string, string> {
@@ -687,6 +693,30 @@ export async function passthroughRawRequest(
     status: response.status,
     timing,
   };
+}
+
+export async function passthroughAlphaSearchRequest(
+  config: ModelConfig,
+  rawBody: Record<string, unknown>,
+  options?: UpstreamRequestOptions,
+): Promise<{ body: unknown; responseText: string; headers: Headers; status: number; timing: UpstreamTiming }> {
+  if (config.subscription_provider) await ensureSubscriptionCredential(config.subscription_provider);
+  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model });
+  const url = getAlphaSearchURL(config);
+  const { response, timing } = await upstreamFetchToUrl(
+    config,
+    url,
+    JSON.stringify(body),
+    false,
+    getForwardHeaders(config, options),
+    options,
+    body,
+  );
+  const responseText = await response.text();
+  setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: responseText });
+  let responseBody: unknown = responseText;
+  try { responseBody = JSON.parse(responseText); } catch {}
+  return { body: responseBody, responseText, headers: response.headers, status: response.status, timing };
 }
 
 // ─── Passthrough (same format, no conversion) ───────────────────────────────

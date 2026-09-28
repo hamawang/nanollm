@@ -586,6 +586,10 @@ const SCRIPT = /* js */ String.raw`
         return (model.name || "").trim() || "模型 " + (index + 1);
       }
 
+      function normalizeModelRef(value) {
+        return String(value || "").trim();
+      }
+
       function formatAdvancedJson(extras) {
         const value = extras && typeof extras === "object" && !Array.isArray(extras) ? extras : {};
         return JSON.stringify(value, null, 2);
@@ -1358,9 +1362,10 @@ const SCRIPT = /* js */ String.raw`
           );
           actions.appendChild(
             createActionButton("删除模型", "danger", () => {
+              const deletedName = normalizeModelRef(model.name);
               formState.models = formState.models.filter((item) => item._id !== model._id);
               formState.fallbackGroups.forEach((group) => {
-                group.members = group.members.filter((member) => member.value !== model.name);
+                group.members = group.members.filter((member) => normalizeModelRef(member.value) !== deletedName);
               });
               markDirty(true);
               renderAll();
@@ -1383,9 +1388,10 @@ const SCRIPT = /* js */ String.raw`
               const previousName = model.name;
               model.name = value;
               if (previousName !== value) {
+                const previousRef = normalizeModelRef(previousName);
                 formState.fallbackGroups.forEach((group) => {
                   group.members.forEach((member) => {
-                    if (member.value === previousName) member.value = value;
+                    if (normalizeModelRef(member.value) === previousRef) member.value = value;
                   });
                 });
               }

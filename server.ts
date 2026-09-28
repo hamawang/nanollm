@@ -13,7 +13,7 @@ import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCo
 import { getPublicModelNames, parseConfigText, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
-import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
+import { forwardRequest, forwardStreamRequest, passthroughAlphaSearchRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 import { renderStatusPage } from "./src/status-page.js";
@@ -791,6 +791,47 @@ function createRoute(incomingFormat: StreamFormat) {
   };
 }
 
+function createAlphaSearchRoute() {
+  return async (c) => {
+    const config = configManager.getActiveSnapshot().effectiveConfig;
+    const rawBody = await c.req.json();
+    const modelName = extractModel(rawBody);
+    if (!modelName) return c.json({ error: "Missing 'model' in request body" }, 400);
+    const candidateModels = getCandidateModels(config, modelName);
+    if (candidateModels.length === 0) return c.json({ error: `Model '${modelName}' not found in config`, available: getPublicModelNames(config) }, 404);
+    const requestId = getRequestId();
+    const stream = isStreamRequest(rawBody);
+    if (requestId) beginRecordedRequest({ requestId, path: c.req.path, headers: c.req.raw.headers, body: rawBody, stream });
+    let lastError;
+    for (const [candidateIndex, modelConfig] of candidateModels.entries()) {
+      const started = Date.now();
+      recordModelAttempt(modelConfig.name, started);
+      try {
+        const result = await passthroughAlphaSearchRequest(modelConfig, rawBody, { userAgent: c.req.header("user-agent"), attemptIndex: candidateIndex + 1, modelName: modelConfig.name });
+        if (result.status >= 400) {
+          const error = Object.assign(new Error(`Upstream ${result.status}: ${result.responseText}`), { status: result.status, upstream: result.responseText });
+          throw error;
+        }
+        recordModelSuccess(modelConfig.name, Date.now() - started, result.timing.ttfbMs);
+        const headers = new Headers(result.headers);
+        headers.delete("content-encoding");
+        headers.delete("content-length");
+        const response = new Response(result.responseText, { status: result.status, headers });
+        if (requestId) { setRecordedClientResponseMeta({ status: response.status, headers: response.headers }); setRecordedClientResponseBody({ body: result.body }); finalizeRecordedRequest({}); }
+        return response;
+      } catch (error) {
+        recordModelFailure(modelConfig.name, Date.now() - started, started);
+        lastError = error;
+      }
+    }
+    const err = lastError as Error & { status?: number; upstream?: string };
+    const status = err?.status || 500;
+    const body = { error: err?.message || "Request failed", ...(err?.upstream ? { upstream: tryParseJSON(err.upstream) } : {}) };
+    if (requestId) { setRecordedRequestError({ message: body.error }); setRecordedClientResponseMeta({ status, headers: new Headers({ "content-type": "application/json" }) }); setRecordedClientResponseBody({ body }); finalizeRecordedRequest({}); }
+    return c.json(body, status);
+  };
+}
+
 function createImageRoute(imageOperation: OpenAIImageOperation) {
   return async (c: Context) => {
     const snapshot = configManager.getActiveSnapshot();
@@ -1132,6 +1173,7 @@ app.get("/", (c) => {
       admin: "GET /admin",
       chat: "POST /v1/chat/completions",
       responses: "POST /v1/responses",
+      alphaSearch: "POST /v1/alpha/search",
       messages: "POST /v1/messages",
       imageGenerations: "POST /v1/images/generations",
       imageEdits: "POST /v1/images/edits",
@@ -1316,6 +1358,8 @@ app.get("/v1/models", (c) => {
 
 app.post("/v1/chat/completions", createRoute("openai-chat"));
 app.post("/v1/responses", createRoute("openai-responses"));
+app.post("/v1/alpha/search", createAlphaSearchRoute());
+app.post("/alpha/search", createAlphaSearchRoute());
 app.post("/v1/messages", createRoute("anthropic"));
 app.post("/v1/images/generations", createImageRoute("generations"));
 app.post("/v1/images/edits", createImageRoute("edits"));
