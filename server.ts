@@ -34,7 +34,7 @@ import {
   denormalizeToAnthropicResponse,
 } from "./src/converters/responses.js";
 import { createSSEConverter, createUsageCollector, formatDone, SSEParser } from "./src/converters/streams.js";
-import { createRequestId, getRequestId, runWithRequestId, withRequestId } from "./src/request-context.js";
+import { createRequestId, getRequestId, runWithRequestId, setClientRequestHeaders, withRequestId } from "./src/request-context.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "./src/response-cache.js";
 import {
   appendRecordedAttemptResponseBody,
@@ -163,6 +163,7 @@ app.use("*", async (c, next) => {
   };
 
   await runWithRequestId(requestId, async () => {
+    setClientRequestHeaders(c.req.raw.headers);
     emitLog(withRequestId(`[HTTP START] method=${c.req.method} path=${c.req.path}`));
 
     try {

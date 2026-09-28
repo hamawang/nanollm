@@ -22,6 +22,7 @@ import {
   responsesResponseToAnthropicMessage,
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
+import { normalizeOpenAIResponsesRequest } from "../src/converters/requests.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
@@ -30,7 +31,7 @@ import { buildModelTestRequest, extractModelTestReply } from "../src/model-test.
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
-import { forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
+import { applyCodexSubscriptionHeaders, forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "../src/response-cache.js";
 import { buildNonStreamResponse, RESPONSE_COMPRESSION_THRESHOLD_BYTES } from "../src/response-compression.js";
 import { renderRecordPage } from "../src/record-page.js";
@@ -56,7 +57,7 @@ import {
   useMemoryRecordStore,
   useSqliteRecordStore,
 } from "../src/record.js";
-import { runWithRequestId } from "../src/request-context.js";
+import { runWithRequestId, setClientRequestHeaders } from "../src/request-context.js";
 import { SqliteStatusStore, StatusStore, getHealthTone } from "../src/status.js";
 import { shouldIgnoreStreamReadError } from "../src/stream-errors.js";
 import { extractErrorCauses, formatErrorWithCauses } from "../src/error-details.js";
@@ -3922,6 +3923,99 @@ await runAsync("openai responses passthrough drops persisted item ids when store
       { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
     ]);
   });
+});
+
+await runAsync("upstream requests forward only provider-specific client headers", async () => {
+  const clientHeaders = new Headers({
+    Authorization: "Bearer client-secret",
+    Cookie: "sid=1",
+    "X-Forwarded-For": "1.2.3.4",
+    session_id: "sess-1",
+    thread_id: "thread-1",
+    conversation_id: "conv-1",
+    version: "0.99.0",
+    "X-Codex-Turn-State": "turn-1",
+    "X-Codex-Routing-Hint": "model=spoofed",
+    "X-OpenAI-Subagent": "review",
+    "Anthropic-Beta": "prompt-caching-2024-07-31",
+    "Anthropic-Version": "2099-01-01",
+  });
+  const received: http.IncomingHttpHeaders[] = [];
+  await withHTTPServer(async (req, res) => {
+    received.push(req.headers);
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url?.endsWith("/messages")) {
+        res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: "m", content: [], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } }));
+      } else if (req.url?.endsWith("/chat/completions")) {
+        res.end(JSON.stringify({ id: "chatcmpl_1", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+      } else {
+        res.end(JSON.stringify({ id: "resp_1", object: "response", output: [], usage: { input_tokens: 1, output_tokens: 1 } }));
+      }
+    });
+  }, async (baseURL) => {
+    await runWithRequestId("req_forward_headers", async () => {
+      setClientRequestHeaders(clientHeaders);
+      const base = { name: "alpha", base_url: baseURL, api_key: "test-key", model: "upstream-alpha" };
+      await passthroughRequest({ ...base, provider: "openai-responses" }, { model: "alpha", input: "hi" });
+      await passthroughRequest({ ...base, provider: "anthropic" }, { model: "alpha", max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+      await passthroughRequest({ ...base, provider: "openai-chat" }, { model: "alpha", messages: [{ role: "user", content: "hi" }] });
+      await forwardRequest({ ...base, provider: "anthropic" }, normalizeOpenAIResponsesRequest({ model: "alpha", input: "hi" } as any));
+    });
+  });
+
+  const [responses, anthropic, chat, converted] = received;
+  assert.equal(responses.session_id, "sess-1");
+  assert.equal(responses.thread_id, "thread-1");
+  assert.equal(responses["x-codex-turn-state"], "turn-1");
+  assert.equal(responses["x-openai-subagent"], "review");
+  assert.equal(responses.conversation_id, "conv-1");
+  assert.equal(responses.version, "0.99.0");
+  assert.equal(responses["x-codex-routing-hint"], undefined);
+  assert.equal(responses["anthropic-beta"], undefined);
+  assert.equal(responses.authorization, "Bearer test-key");
+  assert.equal(responses.cookie, undefined);
+  assert.equal(responses["x-forwarded-for"], undefined);
+
+  assert.equal(anthropic["anthropic-beta"], "prompt-caching-2024-07-31");
+  assert.equal(anthropic["anthropic-version"], "2023-06-01");
+  assert.equal(anthropic["x-api-key"], "test-key");
+  assert.equal(anthropic.session_id, undefined);
+  assert.equal(anthropic["x-codex-turn-state"], undefined);
+  assert.equal(anthropic.authorization, undefined);
+
+  assert.equal(chat.session_id, undefined);
+  assert.equal(chat["anthropic-beta"], undefined);
+  assert.equal(chat["x-codex-turn-state"], undefined);
+
+  // Responses client converted to an Anthropic upstream: Codex headers must not leak.
+  assert.equal(converted["x-codex-turn-state"], undefined);
+  assert.equal(converted.session_id, undefined);
+});
+
+run("codex subscription headers fall back to prompt_cache_key and add routing hint", () => {
+  const derived: Record<string, string> = {};
+  applyCodexSubscriptionHeaders(derived, { model: "gpt-5.5", prompt_cache_key: " pck-1 ", stream: true, service_tier: "fast" });
+  assert.deepEqual(derived, {
+    session_id: "pck-1",
+    conversation_id: "pck-1",
+    accept: "text/event-stream",
+    "x-codex-routing-hint": "model=gpt-5.5;tier=priority",
+  });
+
+  const fromClient: Record<string, string> = { session_id: "sess-1", conversation_id: "conv-1", accept: "application/json" };
+  applyCodexSubscriptionHeaders(fromClient, { model: "gpt-5.5", prompt_cache_key: "pck-1", stream: true, service_tier: "auto" });
+  assert.deepEqual(fromClient, {
+    session_id: "sess-1",
+    conversation_id: "conv-1",
+    accept: "application/json",
+    "x-codex-routing-hint": "model=gpt-5.5",
+  });
+
+  const invalidModel: Record<string, string> = {};
+  applyCodexSubscriptionHeaders(invalidModel, { model: "a;b=c", stream: false });
+  assert.deepEqual(invalidModel, {});
 });
 
 await runAsync("model bodyExpression rewrites passthrough upstream request body", async () => {

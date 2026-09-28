@@ -22,6 +22,7 @@ import {
 import { runInNewContext } from "node:vm";
 import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { extractErrorCauses } from "./error-details.js";
+import { getClientRequestHeaders } from "./request-context.js";
 import { getCachedSubscriptionCredential, ensureSubscriptionCredential, SUBSCRIPTION_URL } from "./openai-subscription.js";
 
 export interface UpstreamRequestOptions {
@@ -77,7 +78,7 @@ function getAuthHeaders(config: ModelConfig): Record<string, string> {
     return {
       Authorization: `Bearer ${credential.accessToken}`,
       ...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
-      originator: "codex_cli_rs",
+      originator: getClientRequestHeaders()?.get("originator") || "codex_cli_rs",
     };
   }
   switch (config.provider) {
@@ -327,13 +328,62 @@ function normalizeUpstreamResponse(provider: StreamFormat, body: unknown): Norma
 
 // ─── Shared fetch ───────────────────────────────────────────────────────────
 
-function getForwardHeaders(config: ModelConfig, options?: UpstreamRequestOptions): Record<string, string> {
-  return {
+const OPENAI_RESPONSES_FORWARDED_HEADERS = new Set(["session_id", "thread_id", "conversation_id", "version"]);
+const OPENAI_RESPONSES_FORWARDED_HEADER_PREFIXES = ["x-openai-", "x-codex-"];
+const ANTHROPIC_FORWARDED_HEADER_PREFIXES = ["anthropic-"];
+// Gateway-owned: always derived from the final upstream request body, never taken from the client.
+const CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint";
+const CODEX_ROUTING_HINT_TIERS: Record<string, string> = { priority: "priority", fast: "priority", flex: "flex", ultrafast: "ultrafast" };
+
+function shouldForwardClientHeader(provider: ModelConfig["provider"], name: string): boolean {
+  switch (provider) {
+    case "openai-responses":
+      if (name === CODEX_ROUTING_HINT_HEADER) return false;
+      return OPENAI_RESPONSES_FORWARDED_HEADERS.has(name) || OPENAI_RESPONSES_FORWARDED_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix));
+    case "anthropic":
+      return ANTHROPIC_FORWARDED_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix));
+    default:
+      return false;
+  }
+}
+
+/** Client headers that the upstream provider uses for session affinity / prompt cache routing. */
+function getForwardedClientHeaders(config: ModelConfig): Record<string, string> {
+  const incoming = getClientRequestHeaders();
+  if (!incoming) return {};
+  const headers: Record<string, string> = {};
+  for (const [key, value] of incoming.entries()) {
+    const name = key.toLowerCase();
+    if (shouldForwardClientHeader(config.provider, name)) headers[name] = value;
+  }
+  return headers;
+}
+
+/** Codex backend (ChatGPT subscription) routes prompt cache by session headers and the routing hint. */
+export function applyCodexSubscriptionHeaders(headers: Record<string, string>, body: unknown): void {
+  if (!isPlainObject(body)) return;
+  const promptCacheKey = typeof body.prompt_cache_key === "string" ? body.prompt_cache_key.trim() : "";
+  if (promptCacheKey) {
+    headers.session_id ||= promptCacheKey;
+    headers.conversation_id ||= promptCacheKey;
+  }
+  if (body.stream === true) headers.accept ||= "text/event-stream";
+
+  const model = typeof body.model === "string" ? body.model.trim() : "";
+  if (!model || /[;=\r\n]/.test(model)) return;
+  const tier = typeof body.service_tier === "string" ? CODEX_ROUTING_HINT_TIERS[body.service_tier.toLowerCase()] : undefined;
+  headers[CODEX_ROUTING_HINT_HEADER] = tier ? `model=${model};tier=${tier}` : `model=${model}`;
+}
+
+function getForwardHeaders(config: ModelConfig, body: unknown, options?: UpstreamRequestOptions): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...getForwardedClientHeaders(config),
     "Content-Type": "application/json",
     ...getAuthHeaders(config),
     ...(options?.userAgent ? { "User-Agent": options.userAgent } : {}),
-    ...(config.headers ?? {}),
   };
+  if (config.subscription_provider) applyCodexSubscriptionHeaders(headers, body);
+  return { ...headers, ...(config.headers ?? {}) };
 }
 
 export function resolveProxyUrl(config: ModelConfig): string | undefined {
@@ -358,7 +408,7 @@ export function createUpstreamDispatcher(config: ModelConfig, proxyUrl = resolve
 
 async function upstreamFetch(
   config: ModelConfig,
-  body: string,
+  body: unknown,
   stream: boolean,
   options?: UpstreamRequestOptions,
 ): Promise<{ response: Response; timing: UpstreamTiming }> {
@@ -366,11 +416,11 @@ async function upstreamFetch(
   return upstreamFetchToUrl(
     config,
     getUpstreamURL(config),
-    body,
+    JSON.stringify(body),
     stream,
-    getForwardHeaders(config, options),
+    getForwardHeaders(config, body, options),
     options,
-    options?.recordedRequestBody ?? body,
+    body,
   );
 }
 
@@ -710,7 +760,7 @@ export async function passthroughAlphaSearchRequest(
     url,
     JSON.stringify(body),
     false,
-    getForwardHeaders(config, options),
+    getForwardHeaders(config, body, options),
     options,
     body,
   );
@@ -729,7 +779,7 @@ export async function passthroughRequest(
   options?: UpstreamRequestOptions,
 ): Promise<{ json: unknown; timing: UpstreamTiming; usage?: NormalizedUsage }> {
   const body = preparePassthroughBody(config, rawBody, false);
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
   const parsed = JSON.parse(text);
@@ -744,7 +794,7 @@ export async function passthroughStreamRequest(
   options?: UpstreamRequestOptions,
 ): Promise<{ body: ReadableStream<Uint8Array>; headers: Headers; timing: UpstreamTiming }> {
   const body = preparePassthroughBody(config, rawBody, true);
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0, config, headers: response.headers });
   return { body: validatedBody, headers: response.headers, timing };
@@ -762,7 +812,7 @@ export async function forwardRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
   const parsed = JSON.parse(text);
@@ -781,7 +831,7 @@ export async function forwardStreamRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0, config, headers: response.headers });
   return { body: validatedBody, upstreamFormat: config.provider, timing };
