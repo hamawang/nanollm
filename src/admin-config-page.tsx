@@ -981,7 +981,15 @@ const SCRIPT = /* js */ String.raw`
                     panel.appendChild(row);
                   });
                 });
-                const resetCount = Number(payload.rate_limit_reset_credits?.available_count || 0);
+                const resetCredits = payload.rate_limit_reset_credits || {};
+                const rawResetCount = resetCredits.available_count ?? resetCredits.availableCount;
+                const resetCount = Number(rawResetCount);
+                const resetCountRow = document.createElement("p");
+                resetCountRow.className = "meta";
+                resetCountRow.textContent = Number.isFinite(resetCount)
+                  ? "5 小时窗口可用重置次数：" + resetCount
+                  : "5 小时窗口可用重置次数：未能查询";
+                panel.appendChild(resetCountRow);
                 if (resetCount > 1) {
                   const resetButton = document.createElement("button");
                   resetButton.type = "button";

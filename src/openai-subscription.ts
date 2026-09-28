@@ -215,9 +215,11 @@ export async function fetchSubscriptionUsage(name: string, proxyUrl?: string) {
     });
     if (creditsResponse.ok) {
       try {
-        const credits = await creditsResponse.json() as { available_count?: unknown; credits?: unknown[] };
-        const availableCount = Number.isFinite(Number(credits.available_count))
-          ? Number(credits.available_count)
+        const credits = await creditsResponse.json() as { available_count?: unknown; availableCount?: unknown; credits?: unknown[]; rate_limit_reset_credits?: { available_count?: unknown; availableCount?: unknown } };
+        const detail = credits.rate_limit_reset_credits || credits;
+        const rawCount = detail.available_count ?? detail.availableCount;
+        const availableCount = Number.isFinite(Number(rawCount))
+          ? Number(rawCount)
           : Array.isArray(credits.credits) ? credits.credits.length : undefined;
         if (availableCount !== undefined) payload.rate_limit_reset_credits = { available_count: availableCount };
       } catch { /* Keep the usage response when optional credit details are unavailable. */ }
