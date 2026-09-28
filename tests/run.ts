@@ -5270,7 +5270,9 @@ run("admin page relies on server cookie auth instead of client-side token storag
   assert.match(html, /function openModelTestDialog/);
   assert.match(html, /"\/admin\/models\/" \+ encodeURIComponent\(name\) \+ "\/test"/);
   assert.match(html, /getEffectiveModelProvider\(model\) !== "openai-image"/);
-  assert.match(html, /你只需要回复ok/);
+  assert.match(html, /Reply with only ok\./);
+  assert.match(html, /only ok/);
+  assert.match(html, /pelican/);
   assert.match(html, /删除供应商/);
   assert.match(html, /不能覆盖 name\/provider\/base_url\/api_key\/model/);
   assert.match(html, /function bindExpressionField/);

@@ -1168,8 +1168,20 @@ const SCRIPT = /* js */ String.raw`
         body.appendChild(note);
 
         const input = document.createElement("textarea");
-        input.value = "你只需要回复ok";
+        input.value = "Reply with only ok.";
         body.appendChild(input);
+
+        const presets = document.createElement("div");
+        presets.className = "model-test-actions";
+        presets.appendChild(createActionButton("only ok", "secondary", () => {
+          input.value = "Reply with only ok.";
+          input.focus();
+        }));
+        presets.appendChild(createActionButton("pelican", "secondary", () => {
+          input.value = "Generate an SVG animation embedded in HTML of a pelican riding a bicycle. Return only the code, with no explanation.";
+          input.focus();
+        }));
+        body.appendChild(presets);
 
         const status = document.createElement("div");
         status.className = "status";

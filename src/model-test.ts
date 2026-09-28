@@ -1,6 +1,7 @@
 import { SSEParser, type StreamFormat } from "./converters/streams.js";
 
-export const DEFAULT_MODEL_TEST_MESSAGE = "你只需要回复ok";
+export const DEFAULT_MODEL_TEST_MESSAGE = "Reply with only ok.";
+export const PELICAN_MODEL_TEST_MESSAGE = "Generate an SVG animation embedded in HTML of a pelican riding a bicycle. Return only the code, with no explanation.";
 
 export function buildModelTestRequest(provider: StreamFormat, modelName: string, message: string): { path: string; body: Record<string, unknown> } {
   switch (provider) {
