@@ -10,6 +10,7 @@ struct Request {
     headers: HashMap<String, String>,
     body: String,
     timeout_secs: Option<u64>,
+    proxy: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -34,11 +35,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     for (key, value) in request.headers {
         headers.insert(HeaderName::from_bytes(key.as_bytes())?, HeaderValue::from_str(&value)?);
     }
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .use_rustls_tls()
         .pool_max_idle_per_host(2)
-        .tcp_keepalive(Duration::from_secs(30))
-        .build()?;
+        .tcp_keepalive(Duration::from_secs(30));
+    if let Some(proxy) = request.proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    }
+    let client = builder.build()?;
     let response = client
         .post(request.url)
         .headers(headers)

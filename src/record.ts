@@ -27,6 +27,7 @@ export interface RecordedAttempt {
   provider: string;
   modelName: string;
   url: string;
+  proxy?: string | null;
   request: RecordedMessage;
   response: {
     status?: number;
@@ -49,6 +50,8 @@ export interface RecordEntry {
   requestId: string;
   key: string;
   createdAt: number;
+  firstByteAt?: number;
+  completedAt?: number;
   stream: boolean;
   clientRequest: {
     path: string;
@@ -101,6 +104,7 @@ interface RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }): RecordedAttempt | undefined;
@@ -123,6 +127,21 @@ interface RecordStoreLike {
   setRequestError(input: { requestId?: string; message: string; causes?: ErrorCauseDetail[] }): void;
   finalizeRequest(input: { requestId?: string }): void;
   flush?(): void | Promise<void>;
+}
+
+// Persist only the proxy endpoint, never credentials or query parameters.
+function sanitizeRecordedProxy(proxy: string | null | undefined): string | null | undefined {
+  if (proxy == null) return proxy;
+  try {
+    const url = new URL(proxy);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid proxy URL]";
+  }
 }
 
 function extractRequestModel(body: unknown): string | undefined {
@@ -387,6 +406,7 @@ class RecordStore implements RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }) {
@@ -400,6 +420,7 @@ class RecordStore implements RecordStoreLike {
       provider: input.provider,
       modelName: input.modelName,
       url: input.url,
+      proxy: sanitizeRecordedProxy(input.proxy),
       request: {
         headers: normalizeHeaders(input.requestHeaders),
         body: body.value,
@@ -470,6 +491,7 @@ class RecordStore implements RecordStoreLike {
     const body = normalizeBody(input.body);
     record.clientResponse.body = body.value;
     record.clientResponse.truncated = body.truncated;
+    record.firstByteAt ??= Date.now();
     record.clientRequest.status = "success";
   }
 
@@ -479,6 +501,7 @@ class RecordStore implements RecordStoreLike {
     const text = appendTextBody(record.clientResponse.body, input.chunk);
     record.clientResponse.body = text.value;
     record.clientResponse.truncated = text.truncated;
+    record.firstByteAt ??= Date.now();
     record.clientRequest.status = "success";
   }
 
@@ -489,7 +512,10 @@ class RecordStore implements RecordStoreLike {
     record.clientRequest.status = "failure";
   }
 
-  finalizeRequest(_input: { requestId?: string }) {}
+  finalizeRequest(input: { requestId?: string }) {
+    const record = this.getMutable(input.requestId);
+    if (record) record.completedAt ??= Date.now();
+  }
 }
 
 type RecordRow = {
@@ -907,6 +933,7 @@ class SqliteRecordStore implements RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }) {
@@ -920,6 +947,7 @@ class SqliteRecordStore implements RecordStoreLike {
       provider: input.provider,
       modelName: input.modelName,
       url: input.url,
+      proxy: sanitizeRecordedProxy(input.proxy),
       request: {
         headers: normalizeHeaders(input.requestHeaders),
         body: body.value,
@@ -1011,6 +1039,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const body = normalizeBody(input.body);
       record.clientResponse.body = body.value;
       record.clientResponse.truncated = body.truncated;
+      record.firstByteAt ??= Date.now();
       record.clientRequest.status = "success";
     });
   }
@@ -1020,6 +1049,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const text = appendTextBody(record.clientResponse.body, input.chunk);
       record.clientResponse.body = text.value;
       record.clientResponse.truncated = text.truncated;
+      record.firstByteAt ??= Date.now();
       record.clientRequest.status = "success";
     });
   }
@@ -1037,6 +1067,7 @@ class SqliteRecordStore implements RecordStoreLike {
     const key = getRecordKey(id);
     const record = this.activeRecords.get(key);
     if (!record) return;
+    record.completedAt ??= Date.now();
     this.activeRecords.delete(key);
     this.persistQueue.set(key, record);
     this.scheduleFlush();
@@ -1099,6 +1130,7 @@ export function ensureRecordedAttempt(input: {
   provider: string;
   modelName: string;
   url: string;
+  proxy?: string | null;
   requestHeaders: Headers | Record<string, string>;
   requestBody: unknown;
 }) {

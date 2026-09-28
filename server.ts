@@ -10,16 +10,17 @@ import { cors } from "hono/cors";
 import { randomUUID } from "node:crypto";
 import type { ModelConfig, ServerConfig } from "./src/config.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "./src/auth.js";
-import { getPublicModelNames, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
+import { getPublicModelNames, parseConfigText, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
-import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
+import { forwardRequest, forwardStreamRequest, passthroughAlphaSearchRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 import { renderStatusPage } from "./src/status-page.js";
 import { SqliteUsageStore, UsageStore, addLocalDays, formatLocalDay, getUsageYears, parseLocalDay, type UsageStoreLike } from "./src/usage.js";
 import { renderRecordPage } from "./src/record-page.js";
 import { renderAdminConfigPage } from "./src/admin-config-page.js";
+import { buildModelTestRequest, DEFAULT_MODEL_TEST_MESSAGE, extractModelTestReply } from "./src/model-test.js";
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import { buildJsonResponse, buildNonStreamResponse } from "./src/response-compression.js";
 import {
@@ -58,9 +59,9 @@ import { shouldIgnoreStreamReadError } from "./src/stream-errors.js";
 import { handleServerStartupError } from "./src/startup-error.js";
 import { openSqliteStorage } from "./src/sqlite.js";
 import { autoMigrateSqliteFileToTurso, resolveTursoAutoMigrationConfig } from "./src/turso-migration.js";
-import { stringify as stringifyYAML } from "yaml";
+import { buildAdminConfigForm, buildAdminConfigFormFromEffectiveConfig, buildYamlTextFromAdminForm, type AdminConfigForm } from "./src/admin-config-form.js";
 import { extractErrorCauses, formatErrorWithCauses } from "./src/error-details.js";
-import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, startDeviceLogin } from "./src/openai-subscription.js";
+import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -130,13 +131,13 @@ if (sqliteStorage?.driver === "turso") {
 }
 const configManager = new ConfigManager(configPath);
 const startupSnapshot = configManager.getActiveSnapshot();
-bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription").map((provider) => provider.name));
+bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
 if (sqliteStorage) {
   useSqliteRecordStore(sqliteStorage.client);
 }
 await startRecording({ maxSize: startupSnapshot.effectiveConfig.record.max_size });
 configManager.onUpdate(({ snapshot }, source) => {
-  bootstrapSubscriptionProviders(snapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription").map((provider) => provider.name));
+  bootstrapSubscriptionProviders(snapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
   void configureRecording({ maxSize: snapshot.effectiveConfig.record.max_size });
   if (source !== "startup") {
     console.log(
@@ -219,42 +220,6 @@ app.use("*", async (c, next) => {
 type Normalizer = (body: unknown) => NormalizedRequest;
 type Denormalizer = (normalized: NormalizedResponse) => unknown;
 type UpstreamOptions = { userAgent?: string; attemptIndex?: number; modelName?: string };
-type AdminModelDraft = {
-  name: string;
-  connection_mode: "direct" | "custom";
-  provider: string;
-  custom_provider: string;
-  base_url: string;
-  api_key: string;
-  model: string;
-  extras?: Record<string, unknown>;
-};
-type AdminProviderDraft = {
-  name: string;
-  provider: string;
-  base_url: string;
-  api_key: string;
-};
-type AdminFallbackDraft = {
-  name: string;
-  members: string[];
-};
-type AdminConfigForm = {
-  rootExtras?: Record<string, unknown>;
-  serverExtras?: Record<string, unknown>;
-  recordExtras?: Record<string, unknown>;
-  server: {
-    port: string;
-    ttfb_timeout: string;
-  };
-  record: {
-    max_size: string;
-  };
-  models: AdminModelDraft[];
-  providers: AdminProviderDraft[];
-  fallbackGroups: AdminFallbackDraft[];
-};
-
 const fallbackFailureTracker = new FallbackFailureTracker();
 const statusStore: StatusStoreLike = sqliteStorage ? new SqliteStatusStore(sqliteStorage.client) : new StatusStore();
 const usageStore: UsageStoreLike = sqliteStorage ? new SqliteUsageStore(sqliteStorage.client) : new UsageStore();
@@ -277,180 +242,6 @@ function persistAuthCookie(c: Context, token: string) {
     "Set-Cookie",
     `${AUTH_COOKIE_NAME}=${buildAuthCookieValue(token)}; Path=/; HttpOnly; SameSite=Lax`,
   );
-}
-
-function toInputString(value: unknown): string {
-  return value === undefined || value === null ? "" : String(value);
-}
-
-function toPositiveIntegerOrUndefined(value: unknown, fieldName: string): number | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  const normalized = Number(value);
-  if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`'${fieldName}' must be a positive integer`);
-  }
-  return normalized;
-}
-
-function toPlainObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
-}
-
-function buildAdminConfigForm(rawText: string): AdminConfigForm {
-  const sourceConfig = parseSourceConfigDocument(rawText) as Record<string, unknown>;
-  const { server, record, models, providers, fallback, ...rootExtras } = sourceConfig;
-  const serverObject = toPlainObject(server);
-  const recordObject = toPlainObject(record);
-  const { port, ttfb_timeout, ...serverExtras } = serverObject;
-  const { max_size, ...recordExtras } = recordObject;
-
-  return {
-    rootExtras,
-    serverExtras,
-    recordExtras,
-    server: {
-      port: toInputString(port),
-      ttfb_timeout: toInputString(ttfb_timeout),
-    },
-    record: {
-      max_size: toInputString(max_size),
-    },
-    providers: Array.isArray(providers)
-      ? providers.map((entry) => {
-          const providerObject = toPlainObject(entry);
-          return {
-            name: toInputString(providerObject.name),
-            provider: toInputString(providerObject.provider),
-            base_url: toInputString(providerObject.base_url),
-            api_key: toInputString(providerObject.api_key),
-          };
-        })
-      : [],
-    models: Array.isArray(models)
-      ? models.map((entry) => {
-          const modelObject = toPlainObject(entry);
-          const { name, provider, custom_provider, base_url, api_key, model, ...extras } = modelObject;
-          return {
-            name: toInputString(name),
-            connection_mode: custom_provider ? "custom" : "direct",
-            provider: toInputString(provider),
-            custom_provider: toInputString(custom_provider),
-            base_url: toInputString(base_url),
-            api_key: toInputString(api_key),
-            model: toInputString(model),
-            extras,
-          };
-        })
-      : [],
-    fallbackGroups:
-      fallback && typeof fallback === "object" && !Array.isArray(fallback)
-        ? Object.entries(fallback as Record<string, unknown>).map(([name, members]) => ({
-            name,
-            members: Array.isArray(members) ? members.map((member) => toInputString(member)).filter(Boolean) : [],
-          }))
-        : [],
-  };
-}
-
-function buildAdminConfigFormFromEffectiveConfig(config: ServerConfig): AdminConfigForm {
-  return {
-    rootExtras: {},
-    serverExtras: {},
-    recordExtras: {},
-    server: {
-      port: toInputString(config.port),
-      ttfb_timeout: toInputString(config.ttfb_timeout),
-    },
-    record: {
-      max_size: toInputString(config.record.max_size),
-    },
-    providers: config.providers.map((provider) => ({ ...provider })),
-    models: config.models.map((model) => ({
-      name: model.name,
-      connection_mode: model.custom_provider ? "custom" : "direct",
-      provider: model.provider,
-      custom_provider: model.custom_provider ?? "",
-      base_url: model.base_url,
-      api_key: model.api_key,
-      model: model.model,
-      extras: {},
-    })),
-    fallbackGroups: Object.entries(config.fallback).map(([name, members]) => ({
-      name,
-      members,
-    })),
-  };
-}
-
-function buildYamlTextFromAdminForm(form: AdminConfigForm, options?: { preservedPort?: unknown }): string {
-  const root = toPlainObject(form.rootExtras);
-  const serverExtras = toPlainObject(form.serverExtras);
-  const recordExtras = toPlainObject(form.recordExtras);
-  const preservedPort = toPositiveIntegerOrUndefined(options?.preservedPort, "server.port");
-  const serverTTFBTimeout = toPositiveIntegerOrUndefined(form.server?.ttfb_timeout, "server.ttfb_timeout");
-  const recordMaxSize = toPositiveIntegerOrUndefined(form.record?.max_size, "record.max_size");
-
-  const providers = Array.isArray(form.providers)
-    ? form.providers.map((entry) => ({
-        name: entry.name ?? "",
-        provider: entry.provider ?? "",
-        ...(entry.provider === "openai-subscription" ? {} : { base_url: entry.base_url ?? "", api_key: entry.api_key ?? "" }),
-      }))
-    : [];
-
-  const models = Array.isArray(form.models)
-    ? form.models.map((entry) => {
-        const customProvider = entry.connection_mode === "custom" ? (entry.custom_provider ?? "").trim() : "";
-        return {
-          ...toPlainObject(entry.extras),
-          name: entry.name ?? "",
-          ...(customProvider
-            ? { custom_provider: customProvider }
-            : { provider: entry.provider ?? "", base_url: entry.base_url ?? "", api_key: entry.api_key ?? "" }),
-          model: entry.model ?? "",
-        };
-      })
-    : [];
-
-  const fallbackGroups = Object.fromEntries(
-    (Array.isArray(form.fallbackGroups) ? form.fallbackGroups : [])
-      .filter((group) => group && typeof group.name === "string" && group.name.trim())
-      .map((group) => [
-        group.name.trim(),
-        (Array.isArray(group.members) ? group.members : []).map((member) => String(member).trim()).filter(Boolean),
-      ]),
-  );
-
-  const document: Record<string, unknown> = { ...root };
-
-  if (providers.length > 0) document.providers = providers;
-
-  if (Object.keys(serverExtras).length > 0 || preservedPort !== undefined || serverTTFBTimeout !== undefined) {
-    document.server = {
-      ...serverExtras,
-      ...(preservedPort !== undefined ? { port: preservedPort } : {}),
-      ...(serverTTFBTimeout !== undefined ? { ttfb_timeout: serverTTFBTimeout } : {}),
-    };
-  }
-
-  if (Object.keys(recordExtras).length > 0 || recordMaxSize !== undefined) {
-    document.record = {
-      ...recordExtras,
-      ...(recordMaxSize !== undefined ? { max_size: recordMaxSize } : {}),
-    };
-  }
-
-  document.models = models;
-  if (Object.keys(fallbackGroups).length > 0) {
-    document.fallback = fallbackGroups;
-  } else if ("fallback" in document) {
-    delete document.fallback;
-  }
-
-  return stringifyYAML(document, {
-    lineWidth: 0,
-    defaultStringType: "PLAIN",
-  });
 }
 
 function getNormalizer(format: StreamFormat): Normalizer {
@@ -676,6 +467,47 @@ async function replayRecordedRequest(record: RecordEntry, config: ServerConfig) 
     status: response.status,
     body,
     requestId: replayRequestId,
+  };
+}
+
+const MODEL_TEST_RAW_LIMIT = 20000;
+
+async function testConfiguredModel(name: string, message: string, config: ServerConfig) {
+  const model = resolveModel(config, name);
+  if (!model) {
+    return { ok: false as const, status: 404, error: `模型 '${name}' 不在当前生效的配置中，请先保存配置。` };
+  }
+  if (model.provider === "openai-image") {
+    return { ok: false as const, status: 400, error: "openai-image 模型不支持消息测试。" };
+  }
+
+  const { path, body } = buildModelTestRequest(model.provider, model.name, message);
+  const headers = new Headers({ "content-type": "application/json", "user-agent": "nanollm-admin-model-test" });
+  if (config.auth?.token) headers.set("authorization", `Bearer ${config.auth.token}`);
+
+  const requestId = createRequestId();
+  const started = Date.now();
+  const response = await runWithRequestId(requestId, async () => app.fetch(new Request(`http://127.0.0.1:${config.port}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  })));
+  const raw = await response.text();
+  const durationMs = Date.now() - started;
+  const isStream = (response.headers.get("content-type") ?? "").includes("text/event-stream");
+  const reply = response.ok && isStream ? extractModelTestReply(model.provider, raw) : "";
+  const errorBody = response.ok ? undefined : (raw ? tryParseJSON(raw) : null);
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    requestId,
+    provider: model.provider,
+    upstreamModel: model.model,
+    durationMs,
+    reply,
+    error: response.ok ? undefined : (errorBody?.error?.message ?? errorBody?.error ?? `HTTP ${response.status}`),
+    raw: raw.length > MODEL_TEST_RAW_LIMIT ? raw.slice(0, MODEL_TEST_RAW_LIMIT) + "\n...(truncated)" : raw,
   };
 }
 
@@ -956,6 +788,47 @@ function createRoute(incomingFormat: StreamFormat) {
     setRecordedClientResponseBody({ body: { error: "Request failed" } });
     finalizeRecordedRequest({});
     return response;
+  };
+}
+
+function createAlphaSearchRoute() {
+  return async (c) => {
+    const config = configManager.getActiveSnapshot().effectiveConfig;
+    const rawBody = await c.req.json();
+    const modelName = extractModel(rawBody);
+    if (!modelName) return c.json({ error: "Missing 'model' in request body" }, 400);
+    const candidateModels = getCandidateModels(config, modelName);
+    if (candidateModels.length === 0) return c.json({ error: `Model '${modelName}' not found in config`, available: getPublicModelNames(config) }, 404);
+    const requestId = getRequestId();
+    const stream = isStreamRequest(rawBody);
+    if (requestId) beginRecordedRequest({ requestId, path: c.req.path, headers: c.req.raw.headers, body: rawBody, stream });
+    let lastError;
+    for (const [candidateIndex, modelConfig] of candidateModels.entries()) {
+      const started = Date.now();
+      recordModelAttempt(modelConfig.name, started);
+      try {
+        const result = await passthroughAlphaSearchRequest(modelConfig, rawBody, { userAgent: c.req.header("user-agent"), attemptIndex: candidateIndex + 1, modelName: modelConfig.name });
+        if (result.status >= 400) {
+          const error = Object.assign(new Error(`Upstream ${result.status}: ${result.responseText}`), { status: result.status, upstream: result.responseText });
+          throw error;
+        }
+        recordModelSuccess(modelConfig.name, Date.now() - started, result.timing.ttfbMs);
+        const headers = new Headers(result.headers);
+        headers.delete("content-encoding");
+        headers.delete("content-length");
+        const response = new Response(result.responseText, { status: result.status, headers });
+        if (requestId) { setRecordedClientResponseMeta({ status: response.status, headers: response.headers }); setRecordedClientResponseBody({ body: result.body }); finalizeRecordedRequest({}); }
+        return response;
+      } catch (error) {
+        recordModelFailure(modelConfig.name, Date.now() - started, started);
+        lastError = error;
+      }
+    }
+    const err = lastError as Error & { status?: number; upstream?: string };
+    const status = err?.status || 500;
+    const body = { error: err?.message || "Request failed", ...(err?.upstream ? { upstream: tryParseJSON(err.upstream) } : {}) };
+    if (requestId) { setRecordedRequestError({ message: body.error }); setRecordedClientResponseMeta({ status, headers: new Headers({ "content-type": "application/json" }) }); setRecordedClientResponseBody({ body }); finalizeRecordedRequest({}); }
+    return c.json(body, status);
   };
 }
 
@@ -1300,6 +1173,7 @@ app.get("/", (c) => {
       admin: "GET /admin",
       chat: "POST /v1/chat/completions",
       responses: "POST /v1/responses",
+      alphaSearch: "POST /v1/alpha/search",
       messages: "POST /v1/messages",
       imageGenerations: "POST /v1/images/generations",
       imageEdits: "POST /v1/images/edits",
@@ -1358,7 +1232,13 @@ app.post("/record/:requestId/replay", async (c) => {
 
 app.get("/admin", (c) => c.html(renderAdminConfigPage(buildConfigAdminPayload())));
 app.post("/admin/providers/:name/device-login", async (c) => {
-  try { return c.json(await startDeviceLogin(c.req.param("name"))); }
+  try {
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === c.req.param("name"));
+    if (!provider || provider.provider !== "openai-subscription") {
+      return c.json({ error: "OpenAI subscription provider not found; save the provider configuration first" }, 404);
+    }
+    return c.json(await startDeviceLogin(provider));
+  }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
 });
 app.get("/admin/providers/:name/device-login/status", (c) => {
@@ -1366,8 +1246,25 @@ app.get("/admin/providers/:name/device-login/status", (c) => {
   return c.json({ authenticated: Boolean(credential?.accessToken && credential.expiresAt > Date.now()), expiresAt: credential?.expiresAt ?? null });
 });
 app.get("/admin/providers/:name/usage", async (c) => {
-  try { return c.json(await fetchSubscriptionUsage(c.req.param("name"))); }
+  try {
+    const name = c.req.param("name");
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (!provider || provider.provider !== "openai-subscription") {
+      return c.json({ error: "OpenAI subscription provider not found" }, 404);
+    }
+    return c.json(await fetchSubscriptionUsage(name, provider.proxy));
+  }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+});
+app.post("/admin/providers/:name/usage/reset", async (c) => {
+  try {
+    const name = c.req.param("name");
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (!provider || provider.provider !== "openai-subscription") return c.json({ error: "OpenAI subscription provider not found" }, 404);
+    return c.json(await resetSubscriptionUsage(name, provider.proxy));
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+  }
 });
 app.post("/admin/providers/:name/device-login/:sessionId/poll", async (c) => {
   try { return c.json(await pollDeviceLogin(c.req.param("sessionId"))); }
@@ -1379,6 +1276,17 @@ app.get("/admin/config", (c) => {
   return c.redirect(target, 302);
 });
 app.get("/admin/config/data", (c) => c.json(buildConfigAdminPayload()));
+app.post("/admin/models/:name/test", async (c) => {
+  let body: { message?: unknown } = {};
+  try { body = await c.req.json(); } catch {}
+  const message = typeof body.message === "string" && body.message.trim() ? body.message : DEFAULT_MODEL_TEST_MESSAGE;
+  try {
+    const result = await testConfiguredModel(c.req.param("name"), message, configManager.getActiveSnapshot().effectiveConfig);
+    return c.json(result, result.ok ? 200 : result.status);
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+});
 app.post("/admin/config/apply", async (c) => {
   let body: { config?: unknown; baseVersion?: unknown };
   try {
@@ -1450,6 +1358,8 @@ app.get("/v1/models", (c) => {
 
 app.post("/v1/chat/completions", createRoute("openai-chat"));
 app.post("/v1/responses", createRoute("openai-responses"));
+app.post("/v1/alpha/search", createAlphaSearchRoute());
+app.post("/alpha/search", createAlphaSearchRoute());
 app.post("/v1/messages", createRoute("anthropic"));
 app.post("/v1/images/generations", createImageRoute("generations"));
 app.post("/v1/images/edits", createImageRoute("edits"));

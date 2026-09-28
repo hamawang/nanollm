@@ -357,7 +357,32 @@ const STYLE = /* css */ String.raw`
         border-color: rgba(143, 91, 51, 0.4);
         background: rgba(143, 91, 51, 0.08);
       }
+      .card.dragging {
+        opacity: 0.5;
+      }
+      .card.drag-over {
+        border-color: rgba(143, 91, 51, 0.55);
+        background: rgba(143, 91, 51, 0.08);
+      }
+      .card-head .drag-handle {
+        align-self: flex-start;
+        margin-top: 2px;
+      }
+      textarea.expression-input {
+        min-height: 120px;
+        resize: vertical;
+        font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        tab-size: 2;
+        white-space: pre;
+      }
       .drag-handle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        font-weight: 700;
         width: 38px;
         min-width: 38px;
         padding: 8px 0;
@@ -379,6 +404,54 @@ const STYLE = /* css */ String.raw`
         font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
         font-size: 12px;
       }
+      dialog.model-test-dialog {
+        width: min(720px, calc(100vw - 32px));
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 20px;
+        background: var(--panel);
+        color: var(--text);
+        box-shadow: var(--shadow);
+      }
+      dialog.model-test-dialog::backdrop {
+        background: rgba(47, 39, 29, 0.35);
+      }
+      .model-test-body {
+        display: grid;
+        gap: 12px;
+      }
+      .model-test-body textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+      .model-test-reply,
+      .model-test-raw {
+        margin: 0;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: #fffdf9;
+        border: 1px solid var(--border);
+        font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 260px;
+        overflow: auto;
+      }
+      .model-test-preview iframe {
+        display: block;
+        width: 100%;
+        height: min(520px, 60vh);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: white;
+      }
+      .model-test-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
       @media (max-width: 960px) {
         .quick-links,
         .field-grid,
@@ -396,12 +469,13 @@ const SCRIPT = /* js */ String.raw`
       const INITIAL_PAYLOAD = __INITIAL_PAYLOAD__;
       const MODEL_PROVIDERS = ["openai-chat", "openai-responses", "anthropic", "openai-image"];
       const PROVIDERS = [...MODEL_PROVIDERS, "openai-subscription"];
-      const RESERVED_MODEL_EXTRA_KEYS = new Set(["name", "provider", "custom_provider", "base_url", "api_key", "model"]);
+      const RESERVED_MODEL_EXTRA_KEYS = new Set(["name", "provider", "custom_provider", "base_url", "api_key", "model", "proxy", "body_expression", "response_expression", "bodyExpression", "responseExpression"]);
       let saving = false;
       let dirty = false;
       let localIdCounter = 0;
       let pendingFocusTarget = null;
       let draggedMember = null;
+      let draggedCard = null;
 
       function nextId(prefix) {
         localIdCounter += 1;
@@ -426,6 +500,7 @@ const SCRIPT = /* js */ String.raw`
           },
           providers: (form.providers || []).map((provider) => ({
             ...provider,
+            proxy: provider.proxy || "",
             _id: nextId("provider"),
             _expanded: false,
           })),
@@ -433,6 +508,9 @@ const SCRIPT = /* js */ String.raw`
             ...model,
             _id: nextId("model"),
             connection_mode: model.connection_mode === "custom" ? "custom" : "direct",
+            proxy: model.proxy || "",
+            body_expression: model.body_expression || "",
+            response_expression: model.response_expression || "",
             _expanded: false,
             _advancedExpanded: false,
             extras: model.extras || {},
@@ -506,6 +584,10 @@ const SCRIPT = /* js */ String.raw`
 
       function getModelLabel(model, index) {
         return (model.name || "").trim() || "模型 " + (index + 1);
+      }
+
+      function normalizeModelRef(value) {
+        return String(value || "").trim();
       }
 
       function formatAdvancedJson(extras) {
@@ -662,6 +744,85 @@ const SCRIPT = /* js */ String.raw`
         container.appendChild(field);
       }
 
+      function bindExpressionField(container, model, key, options) {
+        const field = document.createElement("div");
+        field.className = "field span-2";
+        const label = document.createElement("label");
+        label.textContent = key;
+        const textarea = document.createElement("textarea");
+        textarea.className = "expression-input";
+        textarea.spellcheck = false;
+        textarea.wrap = "off";
+        textarea.value = model[key] || "";
+        textarea.placeholder = options.placeholder;
+        textarea.setAttribute("data-expression-key", key);
+        textarea.addEventListener("keydown", (event) => {
+          if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+          event.preventDefault();
+          textarea.setRangeText("  ", textarea.selectionStart, textarea.selectionEnd, "end");
+          textarea.dispatchEvent(new Event("input"));
+        });
+        textarea.addEventListener("input", (event) => {
+          model[key] = event.target.value;
+          markDirty(true);
+        });
+        const helper = document.createElement("div");
+        helper.className = "helper";
+        helper.textContent = options.helper;
+        field.appendChild(label);
+        field.appendChild(textarea);
+        field.appendChild(helper);
+        container.appendChild(field);
+      }
+
+      function attachCardDrag(card, head, kind, getList, item) {
+        const handle = document.createElement("span");
+        handle.className = "drag-handle";
+        handle.textContent = "⋮⋮";
+        handle.title = "拖拽排序";
+        handle.setAttribute("role", "button");
+        handle.setAttribute("aria-label", "拖拽排序");
+        handle.draggable = true;
+        handle.addEventListener("dragstart", (event) => {
+          draggedCard = { kind, id: item._id };
+          card.classList.add("dragging");
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", item._id);
+            event.dataTransfer.setDragImage(card, 24, 24);
+          }
+        });
+        handle.addEventListener("dragend", () => {
+          draggedCard = null;
+          card.classList.remove("dragging");
+          document.querySelectorAll(".card.drag-over").forEach((element) => element.classList.remove("drag-over"));
+        });
+        card.addEventListener("dragover", (event) => {
+          if (!draggedCard || draggedCard.kind !== kind || draggedCard.id === item._id) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          card.classList.add("drag-over");
+        });
+        card.addEventListener("dragleave", (event) => {
+          if (event.relatedTarget && card.contains(event.relatedTarget)) return;
+          card.classList.remove("drag-over");
+        });
+        card.addEventListener("drop", (event) => {
+          if (!draggedCard || draggedCard.kind !== kind) return;
+          event.preventDefault();
+          card.classList.remove("drag-over");
+          const list = getList();
+          const fromIndex = list.findIndex((entry) => entry._id === draggedCard.id);
+          const toIndex = list.findIndex((entry) => entry._id === item._id);
+          draggedCard = null;
+          if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+          moveArrayItem(list, fromIndex, toIndex);
+          markDirty(true);
+          renderAll({ preserveScroll: true, scrollToFocus: false });
+        });
+        head.insertBefore(handle, head.firstChild);
+      }
+
       function bindAdvancedJsonField(container, model, index) {
         const field = document.createElement("div");
         field.className = "field span-2";
@@ -689,7 +850,7 @@ const SCRIPT = /* js */ String.raw`
 
         const helper = document.createElement("div");
         helper.className = "helper";
-        helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model。";
+        helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model/proxy 以及 body_expression/response_expression（请使用上方独立输入框）。";
         helper.hidden = !model._advancedExpanded;
 
         textarea.addEventListener("input", (event) => {
@@ -699,7 +860,7 @@ const SCRIPT = /* js */ String.raw`
             model.extras = parseAdvancedJson(value, getModelLabel(model, index));
             model._extrasError = "";
             helper.className = "helper";
-            helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model。";
+            helper.textContent = "输入 JSON 对象。保存时会展开到该模型 YAML 中，不能覆盖 name/provider/base_url/api_key/model/proxy 以及 body_expression/response_expression（请使用上方独立输入框）。";
           } catch (error) {
             model._extrasError = error instanceof Error ? error.message : String(error);
             helper.className = "helper error";
@@ -824,6 +985,40 @@ const SCRIPT = /* js */ String.raw`
                     panel.appendChild(row);
                   });
                 });
+                const resetCredits = payload.rate_limit_reset_credits || {};
+                const rawResetCount = resetCredits.available_count ?? resetCredits.availableCount;
+                const resetCount = Number(rawResetCount);
+                const resetCountRow = document.createElement("p");
+                resetCountRow.className = "meta";
+                resetCountRow.textContent = Number.isFinite(resetCount)
+                  ? "5 小时窗口可用重置次数：" + resetCount
+                  : "5 小时窗口可用重置次数：未能查询";
+                panel.appendChild(resetCountRow);
+                if (resetCount > 0) {
+                  const resetButton = document.createElement("button");
+                  resetButton.type = "button";
+                  resetButton.className = "danger";
+                  resetButton.textContent = "重置当前 5 小时窗口（剩余 " + resetCount + " 次）";
+                  resetButton.addEventListener("click", async () => {
+                    if (!window.confirm("确定要重置当前 5 小时窗口吗？这会消耗 1 次重置次数。")) return;
+                    resetButton.disabled = true;
+                    resetButton.textContent = "重置中…";
+                    try {
+                      const resetResponse = await fetch("/admin/providers/" + encodeURIComponent(provider.name) + "/usage/reset", { method: "POST" });
+                      const resetText = await resetResponse.text();
+                      let resetPayload; try { resetPayload = JSON.parse(resetText); } catch { resetPayload = { error: resetText.slice(0, 240) }; }
+                      if (!resetResponse.ok) throw new Error(resetPayload.error || "窗口重置失败");
+                      dialog.close();
+                      window.alert("5 小时窗口已请求重置，请重新查询用量确认结果。");
+                      usageButton.click();
+                    } catch (error) {
+                      resetButton.disabled = false;
+                      resetButton.textContent = "重置当前 5 小时窗口（剩余 " + resetCount + " 次）";
+                      window.alert(error instanceof Error ? error.message : String(error));
+                    }
+                  });
+                  panel.appendChild(resetButton);
+                }
                 const close = document.createElement("button"); close.type = "button"; close.textContent = "关闭"; close.addEventListener("click", () => dialog.close());
                 panel.appendChild(close); dialog.appendChild(panel); document.body.appendChild(dialog); dialog.addEventListener("close", () => dialog.remove(), { once: true }); dialog.showModal();
               } catch (error) { window.alert(error instanceof Error ? error.message : String(error)); }
@@ -840,6 +1035,8 @@ const SCRIPT = /* js */ String.raw`
               })
               .catch(() => { status.textContent = "状态未知"; });
             const loginButton = createActionButton("登录", "secondary", async () => {
+              if (saving) { window.alert("正在保存配置，请保存完成后再登录。"); return; }
+              if (dirty) { window.alert("页面有未保存的修改，请先保存配置，再登录。登录将使用已保存的供应商代理。"); return; }
               const name = (provider.name || "").trim();
               if (!name) { window.alert("请先填写供应商名称并保存配置。"); return; }
               try {
@@ -874,6 +1071,7 @@ const SCRIPT = /* js */ String.raw`
             renderAll();
           }));
           head.appendChild(actions);
+          attachCardDrag(card, head, "provider", () => formState.providers, provider);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -893,11 +1091,18 @@ const SCRIPT = /* js */ String.raw`
           } });
           bindField(grid, "provider", { type: "select", options: PROVIDERS, value: provider.provider || PROVIDERS[0], onInput(value) { provider.provider = value; if (value === "openai-subscription") { provider.base_url = ""; provider.api_key = ""; } markDirty(true); renderAll(); } });
           if (provider.provider === "openai-subscription") {
-            const note = document.createElement("div"); note.className = "helper"; note.textContent = "OAuth subscription; base URL and API key are managed automatically."; grid.appendChild(note);
+            const note = document.createElement("div"); note.className = "helper"; note.textContent = "Base URL 和 API key 由订阅登录自动管理。请先保存供应商及代理配置，再点击登录。"; grid.appendChild(note);
           } else {
             bindField(grid, "base_url", { value: provider.base_url, placeholder: "https://example.com/v1", onInput(value) { provider.base_url = value; markDirty(true); } });
             bindField(grid, "api_key", { value: provider.api_key, placeholder: "支持直接填 key 或环境变量占位符", onInput(value) { provider.api_key = value; markDirty(true); } });
           }
+          bindField(grid, "proxy", {
+            spanClass: "span-2",
+            value: provider.proxy || "",
+            placeholder: "http://127.0.0.1:7890",
+            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。OpenAI 订阅登录、凭证刷新和用量查询也使用此代理；修改后请先保存配置。",
+            onInput(value) { provider.proxy = value; markDirty(true); },
+          });
           body.appendChild(grid);
           card.appendChild(body);
           providersContainer.appendChild(card);
@@ -929,6 +1134,166 @@ const SCRIPT = /* js */ String.raw`
         const upstreamModel = model.model || "未填上游模型名";
         const baseUrl = model.base_url || "未填 base_url";
         return provider + " · " + upstreamModel + " · " + baseUrl;
+      }
+
+      function getEffectiveModelProvider(model) {
+        if (model.connection_mode !== "custom") return model.provider;
+        const provider = formState.providers.find((item) => item.name === model.custom_provider);
+        return provider?.provider === "openai-subscription" ? "openai-responses" : provider?.provider;
+      }
+
+      function getModelTestPreview(text) {
+        let content = String(text || "").trim();
+        const fenced = content.match(/^\x60{3}(?:html|svg|xml)?[ \t]*\r?\n([\s\S]*?)\r?\n?\x60{3}\s*$/i);
+        if (fenced) content = fenced[1].trim();
+        content = content.replace(/^<\?xml\b[\s\S]*?\?>\s*/i, "");
+        const start = content.replace(/^(?:<!--[\s\S]*?-->\s*)*/, "");
+        return /^(?:<!doctype\s+html\b|<(?:html|head|body|svg|div|main|section|article|style|h[1-6]|p|table|canvas)\b)/i.test(start) ? content : null;
+      }
+
+      function openModelTestDialog(model) {
+        const name = (model.name || "").trim();
+        const dialog = document.createElement("dialog");
+        dialog.className = "model-test-dialog";
+        const body = document.createElement("div");
+        body.className = "model-test-body";
+
+        const heading = document.createElement("h3");
+        heading.textContent = "测试模型：" + (name || "未命名模型");
+        body.appendChild(heading);
+
+        const note = document.createElement("div");
+        note.className = "helper";
+        note.textContent = "使用服务端当前已保存的配置发送一次流式请求" + (dirty ? "；页面上还有未保存的修改，不会参与本次测试。" : "。");
+        body.appendChild(note);
+
+        const input = document.createElement("textarea");
+        input.value = "Reply with only ok.";
+        body.appendChild(input);
+
+        const presets = document.createElement("div");
+        presets.className = "model-test-actions";
+        presets.appendChild(createActionButton("only ok", "secondary", () => {
+          input.value = "Reply with only ok.";
+          input.focus();
+        }));
+        presets.appendChild(createActionButton("pelican", "secondary", () => {
+          input.value = "Generate an SVG animation embedded in HTML of a pelican riding a bicycle. Return only the code, with no explanation.";
+          input.focus();
+        }));
+        body.appendChild(presets);
+
+        const status = document.createElement("div");
+        status.className = "status";
+        body.appendChild(status);
+
+        const reply = document.createElement("pre");
+        reply.className = "model-test-reply";
+        reply.hidden = true;
+        body.appendChild(reply);
+
+        const preview = document.createElement("div");
+        preview.className = "model-test-preview";
+        preview.hidden = true;
+        body.appendChild(preview);
+
+        const sourceWrap = document.createElement("details");
+        sourceWrap.hidden = true;
+        const sourceSummary = document.createElement("summary");
+        sourceSummary.textContent = "查看源码";
+        const source = document.createElement("pre");
+        source.className = "model-test-raw";
+        sourceWrap.append(sourceSummary, source);
+        body.appendChild(sourceWrap);
+
+        const rawWrap = document.createElement("details");
+        rawWrap.hidden = true;
+        const rawSummary = document.createElement("summary");
+        rawSummary.textContent = "原始响应";
+        const raw = document.createElement("pre");
+        raw.className = "model-test-raw";
+        rawWrap.append(rawSummary, raw);
+        body.appendChild(rawWrap);
+
+        const actions = document.createElement("div");
+        actions.className = "model-test-actions";
+        const closeButton = createActionButton("关闭", "ghost", () => dialog.close());
+        const sendButton = createActionButton("发送", "", async () => {
+          if (!name) { status.className = "status error"; status.textContent = "请先填写模型名称并保存配置。"; return; }
+          sendButton.disabled = true;
+          status.className = "status warn";
+          status.textContent = "请求中...";
+          reply.hidden = true;
+          preview.hidden = true;
+          preview.replaceChildren();
+          sourceWrap.hidden = true;
+          sourceWrap.open = false;
+          source.textContent = "";
+          rawWrap.hidden = true;
+          try {
+            const response = await fetch("/admin/models/" + encodeURIComponent(name) + "/test", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: input.value }),
+            });
+            const text = await response.text();
+            let payload; try { payload = JSON.parse(text); } catch { payload = { error: text.slice(0, 240) }; }
+            const meta = [
+              payload.status ? "HTTP " + payload.status : "",
+              typeof payload.durationMs === "number" ? payload.durationMs + "ms" : "",
+              payload.upstreamModel ? "上游模型 " + payload.upstreamModel : "",
+            ].filter(Boolean).join(" · ");
+            status.textContent = "";
+            status.className = "status " + (payload.ok ? "success" : "error");
+            status.appendChild(document.createTextNode((payload.ok ? "成功" : "失败：" + (typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error))) + (meta ? " · " + meta : "")));
+            if (payload.requestId) {
+              status.appendChild(document.createTextNode(" · "));
+              const link = document.createElement("a");
+              link.href = "/record?requestId=" + encodeURIComponent(payload.requestId);
+              link.target = "_blank";
+              link.rel = "noopener";
+              link.textContent = "查看记录";
+              status.appendChild(link);
+            }
+            if (payload.ok) {
+              const markup = getModelTestPreview(payload.reply);
+              if (markup !== null) {
+                const frame = document.createElement("iframe");
+                frame.title = "模型回复预览";
+                // Allow local interactive demos without access to the admin origin or network.
+                frame.setAttribute("sandbox", "allow-scripts");
+                frame.referrerPolicy = "no-referrer";
+                frame.srcdoc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; font-src data:; base-uri \'none\'; form-action \'none\';"><meta name="viewport" content="width=device-width, initial-scale=1">' + markup;
+                preview.appendChild(frame);
+                preview.hidden = false;
+                source.textContent = payload.reply;
+                sourceWrap.hidden = false;
+              } else {
+                reply.hidden = false;
+                reply.textContent = payload.reply || "(未解析到文本回复，请查看原始响应)";
+              }
+            }
+            if (payload.raw) {
+              rawWrap.hidden = false;
+              rawWrap.open = !payload.ok || !payload.reply;
+              raw.textContent = payload.raw;
+            }
+          } catch (error) {
+            status.className = "status error";
+            status.textContent = error instanceof Error ? error.message : String(error);
+          } finally {
+            sendButton.disabled = false;
+          }
+        });
+        actions.append(closeButton, sendButton);
+        body.appendChild(actions);
+
+        dialog.appendChild(body);
+        document.body.appendChild(dialog);
+        dialog.addEventListener("close", () => dialog.remove(), { once: true });
+        dialog.showModal();
+        input.focus();
+        input.select();
       }
 
       function renderModels() {
@@ -974,6 +1339,13 @@ const SCRIPT = /* js */ String.raw`
             badge.title = formatExtrasDetail(model.extras);
             title.appendChild(badge);
           }
+          const expressionKeys = ["body_expression", "response_expression"].filter((key) => (model[key] || "").trim());
+          if (expressionKeys.length > 0) {
+            const badge = document.createElement("div");
+            badge.className = "pill neutral";
+            badge.textContent = expressionKeys.join(" · ");
+            title.appendChild(badge);
+          }
           toggleTop.appendChild(title);
           toggle.appendChild(toggleTop);
 
@@ -985,6 +1357,9 @@ const SCRIPT = /* js */ String.raw`
           head.appendChild(toggle);
           const actions = document.createElement("div");
           actions.className = "card-actions";
+          if (getEffectiveModelProvider(model) !== "openai-image") {
+            actions.appendChild(createActionButton("测试", "secondary", () => openModelTestDialog(model)));
+          }
           actions.appendChild(
             createActionButton("复刻", "secondary", () => {
               const id = nextId("model");
@@ -999,15 +1374,17 @@ const SCRIPT = /* js */ String.raw`
           );
           actions.appendChild(
             createActionButton("删除模型", "danger", () => {
+              const deletedName = normalizeModelRef(model.name);
               formState.models = formState.models.filter((item) => item._id !== model._id);
               formState.fallbackGroups.forEach((group) => {
-                group.members = group.members.filter((member) => member.value !== model.name);
+                group.members = group.members.filter((member) => normalizeModelRef(member.value) !== deletedName);
               });
               markDirty(true);
               renderAll();
             }),
           );
           head.appendChild(actions);
+          attachCardDrag(card, head, "model", () => formState.models, model);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -1023,9 +1400,10 @@ const SCRIPT = /* js */ String.raw`
               const previousName = model.name;
               model.name = value;
               if (previousName !== value) {
+                const previousRef = normalizeModelRef(previousName);
                 formState.fallbackGroups.forEach((group) => {
                   group.members.forEach((member) => {
-                    if (member.value === previousName) member.value = value;
+                    if (normalizeModelRef(member.value) === previousRef) member.value = value;
                   });
                 });
               }
@@ -1093,6 +1471,24 @@ const SCRIPT = /* js */ String.raw`
               },
             });
           }
+          bindField(grid, "proxy", {
+            spanClass: "span-2",
+            value: model.proxy || "",
+            placeholder: "http://127.0.0.1:7890",
+            helper: "可选。该模型调用上游时使用的 HTTP proxy，优先级最高；留空则依次回退到供应商 proxy、HTTPS_PROXY/HTTP_PROXY。",
+            onInput(value) {
+              model.proxy = value;
+              markDirty(true);
+            },
+          });
+          bindExpressionField(grid, model, "body_expression", {
+            placeholder: "({\n  ...body,\n  temperature: 0.2,\n})",
+            helper: "可选。JS 表达式，变量 body 为最终上游请求体，需同步返回新的 body；留空表示不改写。",
+          });
+          bindExpressionField(grid, model, "response_expression", {
+            placeholder: "(() => {\n  if (response.model !== 'expected') throw new Error('unexpected model');\n  return response;\n})()",
+            helper: "可选。JS 表达式，变量 response 为上游 JSON/SSE 响应、headers 为只读的上游响应头，需返回新的 response；留空表示不改写。",
+          });
           bindAdvancedJsonField(grid, model, index);
           body.appendChild(grid);
 
@@ -1156,6 +1552,7 @@ const SCRIPT = /* js */ String.raw`
             }),
           );
           head.appendChild(headActions);
+          attachCardDrag(card, head, "fallback", () => formState.fallbackGroups, group);
           card.appendChild(head);
 
           const body = document.createElement("div");
@@ -1425,6 +1822,9 @@ const SCRIPT = /* js */ String.raw`
           base_url: "",
           api_key: "",
           model: "",
+          proxy: "",
+          body_expression: "",
+          response_expression: "",
           extras: {},
           _advancedExpanded: false,
           _advancedJsonText: "{}",
@@ -1444,6 +1844,7 @@ const SCRIPT = /* js */ String.raw`
           provider: "openai-chat",
           base_url: "",
           api_key: "",
+          proxy: "",
         });
         pendingFocusTarget = "provider-name-" + id;
         markDirty(true);

@@ -36,6 +36,25 @@ const STYLE = /* css */ String.raw`
         --danger: #be4a38;
       }
       * { box-sizing: border-box; }
+      .back-admin {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 100;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(140, 90, 47, 0.28);
+        background: rgba(255, 250, 242, 0.95);
+        color: #8c5a2f;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        box-shadow: 0 6px 18px rgba(58, 43, 24, 0.12);
+      }
+      .back-admin:hover {
+        background: #8c5a2f;
+        color: #fff9f1;
+      }
       body {
         margin: 0;
         font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -203,6 +222,11 @@ const STYLE = /* css */ String.raw`
       }
       .recent-key {
         width: 260px;
+      }
+      .recent-key.active {
+        background: #f6e4cc;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(140, 90, 47, 0.35);
       }
       .recent-key small {
         display: block;
@@ -565,6 +589,13 @@ const SCRIPT = String.raw`
       }
 
       let recentExpanded = false;
+      let selectedRequestId = null;
+
+      function markActiveRecent() {
+        recentEl.querySelectorAll(".recent-key").forEach((button) => {
+          button.classList.toggle("active", button.dataset.requestId === selectedRequestId);
+        });
+      }
 
       function getSourceBadgeLabel(source) {
         if (source === "claudecode") return "CC";
@@ -594,7 +625,8 @@ const SCRIPT = String.raw`
       function renderRecentButton(item) {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "recent-key";
+        button.className = "recent-key" + (item.requestId === selectedRequestId ? " active" : "");
+        button.dataset.requestId = item.requestId;
 
         const titleRow = document.createElement("div");
         titleRow.className = "recent-title-row";
@@ -1071,6 +1103,21 @@ const SCRIPT = String.raw`
           if (!payload || typeof payload !== "object") continue;
           const type = item.event || payload.type;
           if (typeof type !== "string") continue;
+
+          // Newer Responses streams may expose web search only through its
+          // lifecycle events instead of an output_item.done payload.
+          if (type.startsWith("response.web_search_call.")) {
+            const oi = payload.output_index ?? outputItems.size;
+            const lifecycle = type.slice("response.web_search_call.".length);
+            const previous = outputItems.get(oi) ?? {};
+            outputItems.set(oi, {
+              ...previous,
+              id: previous.id ?? payload.item_id ?? payload.id,
+              type: "web_search_call",
+              status: lifecycle === "completed" ? "completed" : lifecycle,
+              ...(payload.action ? { action: payload.action } : {}),
+            });
+          }
 
           if (type === "response.output_item.added" && payload.item) {
             const oi = payload.output_index ?? outputItems.size;
@@ -1554,6 +1601,12 @@ const SCRIPT = String.raw`
         return [error.message, ...details].filter((value, index, values) => values.indexOf(value) === index).join(": ");
       }
 
+      function formatElapsed(start, end) {
+        if (!start || !end) return "-";
+        const ms = end - start;
+        return ms >= 1000 ? (ms / 1000).toFixed(2) + " s (" + ms + " ms)" : ms + " ms";
+      }
+
       function renderRecord(record) {
         contentEl.textContent = "";
 
@@ -1564,6 +1617,8 @@ const SCRIPT = String.raw`
           ["path", record.clientRequest?.path],
           ["stream", record.stream],
           ["createdAt", record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "-"],
+          ["ttfb", formatElapsed(record.createdAt, record.firstByteAt)],
+          ["duration", formatElapsed(record.createdAt, record.completedAt)],
           ["error", formatRecordedError(record.error)],
         ]);
         baseSection.appendChild(createReplayControls(record));
@@ -1597,6 +1652,7 @@ const SCRIPT = String.raw`
             card.appendChild(head);
             appendKV(card, [
               ["url", attempt.url],
+              ["proxy", attempt.proxy === null ? "直连（未使用代理）" : attempt.proxy ?? "未记录（历史记录）"],
               ["status", attempt.response?.status],
               ["error", formatRecordedError(attempt.error)],
             ]);
@@ -1666,12 +1722,16 @@ const SCRIPT = String.raw`
         const response = await fetch("/record/" + encodeURIComponent(requestId), { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) {
+          selectedRequestId = null;
+          markActiveRecent();
           if (payload.summary) {
             setSummary(payload.summary);
           }
           renderError(payload.error || "查询失败");
           return;
         }
+        selectedRequestId = requestId;
+        markActiveRecent();
         if (payload.summary) {
           setSummary(payload.summary);
         }
@@ -1707,6 +1767,7 @@ function RecordPage({ summary }: { summary: RecordSummary }) {
         <style dangerouslySetInnerHTML={{ __html: STYLE }} />
       </head>
       <body>
+    <a class="back-admin" href="/admin">← Admin</a>
     <main class="page">
       <section class={panelClass} id="record-panel">
         <h1>Request Record</h1>

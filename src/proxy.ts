@@ -62,6 +62,12 @@ export function getUpstreamURLForPath(config: ModelConfig, imageOperation?: Open
   }
 }
 
+export function getAlphaSearchURL(config: ModelConfig): string {
+  if (config.subscription_provider) return `${SUBSCRIPTION_URL}/alpha/search`;
+  const base = config.base_url.replace(/\/+$/, "");
+  return `${base}/alpha/search`;
+}
+
 // ─── Auth Headers ───────────────────────────────────────────────────────────
 
 function getAuthHeaders(config: ModelConfig): Record<string, string> {
@@ -331,7 +337,7 @@ function getForwardHeaders(config: ModelConfig, options?: UpstreamRequestOptions
 }
 
 export function resolveProxyUrl(config: ModelConfig): string | undefined {
-  return config.proxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  return config.proxy || config.provider_proxy || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 }
 
 const upstreamAgents = {
@@ -394,6 +400,7 @@ async function upstreamFetchToUrl(
     provider: config.provider,
     modelName: options?.modelName ?? config.name,
     url,
+    proxy: proxyUrl ?? null,
     requestHeaders: fetchOptions.headers as Record<string, string>,
     requestBody: recordedRequestBody,
   });
@@ -686,6 +693,32 @@ export async function passthroughRawRequest(
     status: response.status,
     timing,
   };
+}
+
+export async function passthroughAlphaSearchRequest(
+  config: ModelConfig,
+  rawBody: Record<string, unknown>,
+  options?: UpstreamRequestOptions,
+): Promise<{ body: unknown; responseText: string; headers: Headers; status: number; timing: UpstreamTiming }> {
+  if (config.subscription_provider) await ensureSubscriptionCredential(config.subscription_provider);
+  // alpha/search is a separate Codex wire protocol. Only remap the model;
+  // model body/response expressions are intentionally scoped to normal APIs.
+  const body = { ...rawBody, model: config.model };
+  const url = getAlphaSearchURL(config);
+  const { response, timing } = await upstreamFetchToUrl(
+    config,
+    url,
+    JSON.stringify(body),
+    false,
+    getForwardHeaders(config, options),
+    options,
+    body,
+  );
+  const responseText = await response.text();
+  setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: responseText });
+  let responseBody: unknown = responseText;
+  try { responseBody = JSON.parse(responseText); } catch {}
+  return { body: responseBody, responseText, headers: response.headers, status: response.status, timing };
 }
 
 // ─── Passthrough (same format, no conversion) ───────────────────────────────
