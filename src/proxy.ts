@@ -701,7 +701,9 @@ export async function passthroughAlphaSearchRequest(
   options?: UpstreamRequestOptions,
 ): Promise<{ body: unknown; responseText: string; headers: Headers; status: number; timing: UpstreamTiming }> {
   if (config.subscription_provider) await ensureSubscriptionCredential(config.subscription_provider);
-  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model });
+  // alpha/search is a separate Codex wire protocol. Only remap the model;
+  // model body/response expressions are intentionally scoped to normal APIs.
+  const body = { ...rawBody, model: config.model };
   const url = getAlphaSearchURL(config);
   const { response, timing } = await upstreamFetchToUrl(
     config,

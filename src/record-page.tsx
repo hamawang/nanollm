@@ -1104,6 +1104,21 @@ const SCRIPT = String.raw`
           const type = item.event || payload.type;
           if (typeof type !== "string") continue;
 
+          // Newer Responses streams may expose web search only through its
+          // lifecycle events instead of an output_item.done payload.
+          if (type.startsWith("response.web_search_call.")) {
+            const oi = payload.output_index ?? outputItems.size;
+            const lifecycle = type.slice("response.web_search_call.".length);
+            const previous = outputItems.get(oi) ?? {};
+            outputItems.set(oi, {
+              ...previous,
+              id: previous.id ?? payload.item_id ?? payload.id,
+              type: "web_search_call",
+              status: lifecycle === "completed" ? "completed" : lifecycle,
+              ...(payload.action ? { action: payload.action } : {}),
+            });
+          }
+
           if (type === "response.output_item.added" && payload.item) {
             const oi = payload.output_index ?? outputItems.size;
             const base = { id: payload.item.id, status: payload.item.status ?? "in_progress" };
