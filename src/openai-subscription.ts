@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
+import type { CustomProviderConfig } from "./config.js";
 import { oauthPost } from "./oauth-transport.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -12,7 +14,8 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 export const SUBSCRIPTION_URL = "https://chatgpt.com/backend-api/codex";
 const timers = new Map<string, NodeJS.Timeout>();
 const cache = new Map<string, SubscriptionCredential>();
-const deviceSessions = new Map<string, { provider: string; deviceAuthId: string; userCode: string; expiresAt: number; interval: number }>();
+const deviceSessions = new Map<string, { provider: string; proxy?: string; deviceAuthId: string; userCode: string; expiresAt: number; interval: number }>();
+let subscriptionProviders = new Map<string, CustomProviderConfig>();
 let credentialDirectory: string | undefined;
 const UUID_JSON_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i;
 
@@ -104,8 +107,8 @@ function schedule(name: string, value: SubscriptionCredential) {
   const delay = Math.max(30_000, value.expiresAt - Date.now() - 5 * 60_000);
   timers.set(name, setTimeout(() => { void refresh(name).catch((e) => console.error(`[OPENAI SUBSCRIPTION] refresh failed for ${name}:`, e)); }, delay));
 }
-async function tokenRequest(body: URLSearchParams) {
-  const response = await oauthPost(TOKEN_URL, body);
+async function tokenRequest(body: URLSearchParams, proxy?: string) {
+  const response = await oauthPost(TOKEN_URL, body, undefined, proxy);
   const text = response.body;
   let data: any;
   try { data = JSON.parse(text); } catch { throw new Error(`OpenAI OAuth token request failed (${response.status}): ${text.slice(0, 240)}`); }
@@ -113,9 +116,11 @@ async function tokenRequest(body: URLSearchParams) {
   return data;
 }
 export interface DeviceLoginStart { verificationUri: string; verificationUriComplete?: string; userCode: string; sessionId: string; expiresIn: number; interval: number; }
-export async function startDeviceLogin(name: string): Promise<DeviceLoginStart> {
+export async function startDeviceLogin(provider: CustomProviderConfig): Promise<DeviceLoginStart> {
+  if (provider.provider !== "openai-subscription") throw new Error("Provider is not an OpenAI subscription");
+  const name = provider.name;
   providerDir();
-  const response = await oauthPost(DEVICE_USER_CODE_URL, JSON.stringify({ client_id: CLIENT_ID }), "application/json");
+  const response = await oauthPost(DEVICE_USER_CODE_URL, JSON.stringify({ client_id: CLIENT_ID }), "application/json", provider.proxy);
   const text = response.body;
   let data: any;
   try { data = JSON.parse(text); } catch { throw new Error(`OpenAI device code request failed (${response.status}): ${text.slice(0, 240)}`); }
@@ -124,13 +129,13 @@ export async function startDeviceLogin(name: string): Promise<DeviceLoginStart> 
   const expiresIn = 15 * 60;
   const interval = Number(data.interval || 5);
   if (!data.device_auth_id || !data.user_code) throw new Error("OpenAI device code response is missing required fields");
-  deviceSessions.set(sessionId, { provider: name, deviceAuthId: data.device_auth_id, userCode: data.user_code, expiresAt: Date.now() + expiresIn * 1000, interval });
+  deviceSessions.set(sessionId, { provider: name, proxy: provider.proxy, deviceAuthId: data.device_auth_id, userCode: data.user_code, expiresAt: Date.now() + expiresIn * 1000, interval });
   return { verificationUri: DEVICE_VERIFICATION_URI, userCode: data.user_code, sessionId, expiresIn, interval };
 }
 export async function pollDeviceLogin(sessionId: string): Promise<{ status: "pending" | "authenticated"; retryAfter?: number }> {
   const session = deviceSessions.get(sessionId);
   if (!session || session.expiresAt <= Date.now()) { deviceSessions.delete(sessionId); throw new Error("Device login session expired"); }
-  const response = await oauthPost(DEVICE_TOKEN_URL, JSON.stringify({ device_auth_id: session.deviceAuthId, user_code: session.userCode }), "application/json");
+  const response = await oauthPost(DEVICE_TOKEN_URL, JSON.stringify({ device_auth_id: session.deviceAuthId, user_code: session.userCode }), "application/json", session.proxy);
   const text = response.body;
   let data: any;
   try { data = JSON.parse(text); } catch { throw new Error(`OpenAI device login failed (${response.status}): ${text.slice(0, 240)}`); }
@@ -140,14 +145,16 @@ export async function pollDeviceLogin(sessionId: string): Promise<{ status: "pen
     throw new Error(`OpenAI device login failed (${response.status}): ${data.error_description || data.error || "unknown error"}`);
   }
   if (!data.authorization_code || !data.code_verifier) throw new Error("OpenAI device login response is missing authorization code fields");
-  const token = await tokenRequest(new URLSearchParams({ grant_type: "authorization_code", client_id: CLIENT_ID, code: data.authorization_code, code_verifier: data.code_verifier, redirect_uri: DEVICE_REDIRECT_URI }));
+  const token = await tokenRequest(new URLSearchParams({ grant_type: "authorization_code", client_id: CLIENT_ID, code: data.authorization_code, code_verifier: data.code_verifier, redirect_uri: DEVICE_REDIRECT_URI }), session.proxy);
   const value = normalizeCredential({ ...token, accessToken: token.access_token, refreshToken: token.refresh_token, idToken: token.id_token, expiresAt: Date.now() + Number(token.expires_in || 3600) * 1000, obtainedAt: Date.now(), accountId: token.account_id });
   save(session.provider, value); schedule(session.provider, value); deviceSessions.delete(sessionId);
   return { status: "authenticated" };
 }
 async function refresh(name: string): Promise<SubscriptionCredential> {
+  const provider = subscriptionProviders.get(name);
+  if (!provider) throw new Error(`OpenAI subscription provider '${name}' is not configured`);
   const current = load(name); if (!current?.refreshToken) throw new Error(`No refresh token for subscription provider '${name}'`);
-  const token = await tokenRequest(new URLSearchParams({ grant_type: "refresh_token", refresh_token: current.refreshToken, client_id: CLIENT_ID }));
+  const token = await tokenRequest(new URLSearchParams({ grant_type: "refresh_token", refresh_token: current.refreshToken, client_id: CLIENT_ID }), provider.proxy);
   const value = normalizeCredential({ ...current, ...token, accessToken: token.access_token, refreshToken: token.refresh_token || current.refreshToken, idToken: token.id_token || current.idToken, expiresAt: Date.now() + Number(token.expires_in || 3600) * 1000, obtainedAt: Date.now() });
   save(name, value); schedule(name, value); return value;
 }
@@ -158,32 +165,105 @@ export async function ensureSubscriptionCredential(name: string) {
   throw new Error(`OpenAI subscription provider '${name}' is not authenticated. Start device login from the admin page.`);
 }
 export function getCachedSubscriptionCredential(name: string) { return load(name); }
-export async function fetchSubscriptionUsage(name: string) {
+export async function fetchSubscriptionUsage(name: string, proxyUrl?: string) {
   let credential = await ensureSubscriptionCredential(name);
   if (!credential.accountId) throw new Error(`OpenAI subscription provider '${name}' is missing an account ID`);
-  const request = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${credential.accessToken}`,
-      "ChatGPT-Account-Id": credential.accountId!,
-    },
-    cache: "no-store",
-    signal: AbortSignal.timeout(15_000),
-  });
-  let response = await request();
-  if (response.status === 401 && credential.refreshToken) {
-    credential = await refresh(name);
-    response = await request();
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  try {
+    const request = () => undiciFetch("https://chatgpt.com/backend-api/wham/usage", {
+      dispatcher,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${credential.accessToken}`,
+        "ChatGPT-Account-Id": credential.accountId!,
+        "OpenAI-Beta": "codex-1",
+        "OAI-Language": "zh-CN",
+        Originator: "Codex Desktop",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Dest": "empty",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    let response = await request();
+    if (response.status === 401 && credential.refreshToken) {
+      await response.body?.cancel();
+      credential = await refresh(name);
+      response = await request();
+    }
+    const text = await response.text();
+    if (!response.ok) throw new Error(response.status === 401 ? "OpenAI authorization expired; please sign in again" : `OpenAI usage request failed (${response.status}): ${text.slice(0, 240)}`);
+    let payload: any;
+    try { payload = JSON.parse(text); } catch { throw new Error("OpenAI usage response is not valid JSON"); }
+    if (!payload || typeof payload !== "object" || !("rate_limit" in payload)) throw new Error("OpenAI usage response has an unknown format");
+    const creditsResponse = await undiciFetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
+      dispatcher,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${credential.accessToken}`,
+        "ChatGPT-Account-Id": credential.accountId!,
+        "OpenAI-Beta": "codex-1",
+        "OAI-Language": "zh-CN",
+        Originator: "Codex Desktop",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Dest": "empty",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (creditsResponse.ok) {
+      try {
+        const credits = await creditsResponse.json() as { available_count?: unknown; credits?: unknown[] };
+        const availableCount = Number.isFinite(Number(credits.available_count))
+          ? Number(credits.available_count)
+          : Array.isArray(credits.credits) ? credits.credits.length : undefined;
+        if (availableCount !== undefined) payload.rate_limit_reset_credits = { available_count: availableCount };
+      } catch { /* Keep the usage response when optional credit details are unavailable. */ }
+    }
+    return payload;
+  } finally {
+    await dispatcher?.close();
   }
-  const text = await response.text();
-  if (!response.ok) throw new Error(response.status === 401 ? "OpenAI authorization expired; please sign in again" : `OpenAI usage request failed (${response.status}): ${text.slice(0, 240)}`);
-  let payload: any;
-  try { payload = JSON.parse(text); } catch { throw new Error("OpenAI usage response is not valid JSON"); }
-  if (!payload || typeof payload !== "object" || !("rate_limit" in payload)) throw new Error("OpenAI usage response has an unknown format");
-  return payload;
 }
-export function bootstrapSubscriptionProviders(names: string[]) {
-  for (const name of names) {
+
+export async function resetSubscriptionUsage(name: string, proxyUrl?: string) {
+  const credential = await ensureSubscriptionCredential(name);
+  if (!credential.accountId) throw new Error(`OpenAI subscription provider '${name}' is missing an account ID`);
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  try {
+    const response = await undiciFetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {
+      method: "POST",
+      dispatcher,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${credential.accessToken}`,
+        "ChatGPT-Account-Id": credential.accountId,
+        "OpenAI-Beta": "codex-1",
+        "OAI-Language": "zh-CN",
+        Originator: "Codex Desktop",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Dest": "empty",
+      },
+      body: JSON.stringify({ redeem_request_id: randomUUID() }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`OpenAI usage reset failed (${response.status}): ${text.slice(0, 240)}`);
+    try { return JSON.parse(text); } catch { return { raw: text }; }
+  } finally {
+    await dispatcher?.close();
+  }
+}
+export function bootstrapSubscriptionProviders(providers: CustomProviderConfig[]) {
+  subscriptionProviders = new Map(providers.filter((provider) => provider.provider === "openai-subscription").map((provider) => [provider.name, { ...provider }]));
+  for (const [name, timer] of timers) {
+    if (!subscriptionProviders.has(name)) { clearTimeout(timer); timers.delete(name); }
+  }
+  for (const name of subscriptionProviders.keys()) {
     const value = load(name);
     if (!value) { console.warn(`[OPENAI SUBSCRIPTION] ${name}: no credential file; authenticate when the model is first used`); continue; }
     if (value.expiresAt > Date.now() + 60_000) { schedule(name, value); continue; }

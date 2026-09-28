@@ -439,6 +439,14 @@ const STYLE = /* css */ String.raw`
         max-height: 260px;
         overflow: auto;
       }
+      .model-test-preview iframe {
+        display: block;
+        width: 100%;
+        height: min(520px, 60vh);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: white;
+      }
       .model-test-actions {
         display: flex;
         gap: 8px;
@@ -973,6 +981,32 @@ const SCRIPT = /* js */ String.raw`
                     panel.appendChild(row);
                   });
                 });
+                const resetCount = Number(payload.rate_limit_reset_credits?.available_count || 0);
+                if (resetCount > 1) {
+                  const resetButton = document.createElement("button");
+                  resetButton.type = "button";
+                  resetButton.className = "danger";
+                  resetButton.textContent = "重置当前 5 小时窗口（剩余 " + resetCount + " 次）";
+                  resetButton.addEventListener("click", async () => {
+                    if (!window.confirm("确定要重置当前 5 小时窗口吗？这会消耗 1 次重置次数。")) return;
+                    resetButton.disabled = true;
+                    resetButton.textContent = "重置中…";
+                    try {
+                      const resetResponse = await fetch("/admin/providers/" + encodeURIComponent(provider.name) + "/usage/reset", { method: "POST" });
+                      const resetText = await resetResponse.text();
+                      let resetPayload; try { resetPayload = JSON.parse(resetText); } catch { resetPayload = { error: resetText.slice(0, 240) }; }
+                      if (!resetResponse.ok) throw new Error(resetPayload.error || "窗口重置失败");
+                      dialog.close();
+                      window.alert("5 小时窗口已请求重置，请重新查询用量确认结果。");
+                      usageButton.click();
+                    } catch (error) {
+                      resetButton.disabled = false;
+                      resetButton.textContent = "重置当前 5 小时窗口（剩余 " + resetCount + " 次）";
+                      window.alert(error instanceof Error ? error.message : String(error));
+                    }
+                  });
+                  panel.appendChild(resetButton);
+                }
                 const close = document.createElement("button"); close.type = "button"; close.textContent = "关闭"; close.addEventListener("click", () => dialog.close());
                 panel.appendChild(close); dialog.appendChild(panel); document.body.appendChild(dialog); dialog.addEventListener("close", () => dialog.remove(), { once: true }); dialog.showModal();
               } catch (error) { window.alert(error instanceof Error ? error.message : String(error)); }
@@ -989,6 +1023,8 @@ const SCRIPT = /* js */ String.raw`
               })
               .catch(() => { status.textContent = "状态未知"; });
             const loginButton = createActionButton("登录", "secondary", async () => {
+              if (saving) { window.alert("正在保存配置，请保存完成后再登录。"); return; }
+              if (dirty) { window.alert("页面有未保存的修改，请先保存配置，再登录。登录将使用已保存的供应商代理。"); return; }
               const name = (provider.name || "").trim();
               if (!name) { window.alert("请先填写供应商名称并保存配置。"); return; }
               try {
@@ -1043,7 +1079,7 @@ const SCRIPT = /* js */ String.raw`
           } });
           bindField(grid, "provider", { type: "select", options: PROVIDERS, value: provider.provider || PROVIDERS[0], onInput(value) { provider.provider = value; if (value === "openai-subscription") { provider.base_url = ""; provider.api_key = ""; } markDirty(true); renderAll(); } });
           if (provider.provider === "openai-subscription") {
-            const note = document.createElement("div"); note.className = "helper"; note.textContent = "OAuth subscription; base URL and API key are managed automatically."; grid.appendChild(note);
+            const note = document.createElement("div"); note.className = "helper"; note.textContent = "Base URL 和 API key 由订阅登录自动管理。请先保存供应商及代理配置，再点击登录。"; grid.appendChild(note);
           } else {
             bindField(grid, "base_url", { value: provider.base_url, placeholder: "https://example.com/v1", onInput(value) { provider.base_url = value; markDirty(true); } });
             bindField(grid, "api_key", { value: provider.api_key, placeholder: "支持直接填 key 或环境变量占位符", onInput(value) { provider.api_key = value; markDirty(true); } });
@@ -1052,7 +1088,7 @@ const SCRIPT = /* js */ String.raw`
             spanClass: "span-2",
             value: provider.proxy || "",
             placeholder: "http://127.0.0.1:7890",
-            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。",
+            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。OpenAI 订阅登录、凭证刷新和用量查询也使用此代理；修改后请先保存配置。",
             onInput(value) { provider.proxy = value; markDirty(true); },
           });
           body.appendChild(grid);
@@ -1094,6 +1130,15 @@ const SCRIPT = /* js */ String.raw`
         return provider?.provider === "openai-subscription" ? "openai-responses" : provider?.provider;
       }
 
+      function getModelTestPreview(text) {
+        let content = String(text || "").trim();
+        const fenced = content.match(/^\x60{3}(?:html|svg|xml)?[ \t]*\r?\n([\s\S]*?)\r?\n?\x60{3}\s*$/i);
+        if (fenced) content = fenced[1].trim();
+        content = content.replace(/^<\?xml\b[\s\S]*?\?>\s*/i, "");
+        const start = content.replace(/^(?:<!--[\s\S]*?-->\s*)*/, "");
+        return /^(?:<!doctype\s+html\b|<(?:html|head|body|svg|div|main|section|article|style|h[1-6]|p|table|canvas)\b)/i.test(start) ? content : null;
+      }
+
       function openModelTestDialog(model) {
         const name = (model.name || "").trim();
         const dialog = document.createElement("dialog");
@@ -1123,6 +1168,20 @@ const SCRIPT = /* js */ String.raw`
         reply.hidden = true;
         body.appendChild(reply);
 
+        const preview = document.createElement("div");
+        preview.className = "model-test-preview";
+        preview.hidden = true;
+        body.appendChild(preview);
+
+        const sourceWrap = document.createElement("details");
+        sourceWrap.hidden = true;
+        const sourceSummary = document.createElement("summary");
+        sourceSummary.textContent = "查看源码";
+        const source = document.createElement("pre");
+        source.className = "model-test-raw";
+        sourceWrap.append(sourceSummary, source);
+        body.appendChild(sourceWrap);
+
         const rawWrap = document.createElement("details");
         rawWrap.hidden = true;
         const rawSummary = document.createElement("summary");
@@ -1141,6 +1200,11 @@ const SCRIPT = /* js */ String.raw`
           status.className = "status warn";
           status.textContent = "请求中...";
           reply.hidden = true;
+          preview.hidden = true;
+          preview.replaceChildren();
+          sourceWrap.hidden = true;
+          sourceWrap.open = false;
+          source.textContent = "";
           rawWrap.hidden = true;
           try {
             const response = await fetch("/admin/models/" + encodeURIComponent(name) + "/test", {
@@ -1168,8 +1232,22 @@ const SCRIPT = /* js */ String.raw`
               status.appendChild(link);
             }
             if (payload.ok) {
-              reply.hidden = false;
-              reply.textContent = payload.reply || "(未解析到文本回复，请查看原始响应)";
+              const markup = getModelTestPreview(payload.reply);
+              if (markup !== null) {
+                const frame = document.createElement("iframe");
+                frame.title = "模型回复预览";
+                // Allow local interactive demos without access to the admin origin or network.
+                frame.setAttribute("sandbox", "allow-scripts");
+                frame.referrerPolicy = "no-referrer";
+                frame.srcdoc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; font-src data:; base-uri \'none\'; form-action \'none\';"><meta name="viewport" content="width=device-width, initial-scale=1">' + markup;
+                preview.appendChild(frame);
+                preview.hidden = false;
+                source.textContent = payload.reply;
+                sourceWrap.hidden = false;
+              } else {
+                reply.hidden = false;
+                reply.textContent = payload.reply || "(未解析到文本回复，请查看原始响应)";
+              }
             }
             if (payload.raw) {
               rawWrap.hidden = false;

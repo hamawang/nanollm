@@ -27,6 +27,7 @@ export interface RecordedAttempt {
   provider: string;
   modelName: string;
   url: string;
+  proxy?: string | null;
   request: RecordedMessage;
   response: {
     status?: number;
@@ -103,6 +104,7 @@ interface RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }): RecordedAttempt | undefined;
@@ -125,6 +127,21 @@ interface RecordStoreLike {
   setRequestError(input: { requestId?: string; message: string; causes?: ErrorCauseDetail[] }): void;
   finalizeRequest(input: { requestId?: string }): void;
   flush?(): void | Promise<void>;
+}
+
+// Persist only the proxy endpoint, never credentials or query parameters.
+function sanitizeRecordedProxy(proxy: string | null | undefined): string | null | undefined {
+  if (proxy == null) return proxy;
+  try {
+    const url = new URL(proxy);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid proxy URL]";
+  }
 }
 
 function extractRequestModel(body: unknown): string | undefined {
@@ -389,6 +406,7 @@ class RecordStore implements RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }) {
@@ -402,6 +420,7 @@ class RecordStore implements RecordStoreLike {
       provider: input.provider,
       modelName: input.modelName,
       url: input.url,
+      proxy: sanitizeRecordedProxy(input.proxy),
       request: {
         headers: normalizeHeaders(input.requestHeaders),
         body: body.value,
@@ -914,6 +933,7 @@ class SqliteRecordStore implements RecordStoreLike {
     provider: string;
     modelName: string;
     url: string;
+    proxy?: string | null;
     requestHeaders: Headers | Record<string, string>;
     requestBody: unknown;
   }) {
@@ -927,6 +947,7 @@ class SqliteRecordStore implements RecordStoreLike {
       provider: input.provider,
       modelName: input.modelName,
       url: input.url,
+      proxy: sanitizeRecordedProxy(input.proxy),
       request: {
         headers: normalizeHeaders(input.requestHeaders),
         body: body.value,
@@ -1109,6 +1130,7 @@ export function ensureRecordedAttempt(input: {
   provider: string;
   modelName: string;
   url: string;
+  proxy?: string | null;
   requestHeaders: Headers | Record<string, string>;
   requestBody: unknown;
 }) {

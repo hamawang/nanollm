@@ -4637,6 +4637,7 @@ await runAsync("record store resets on start and supports full request id lookup
     provider: "openai-chat",
     modelName: "alpha",
     url: "https://example.com/v1/chat/completions",
+    proxy: "http://alice:secret@proxy.example:7890/?token=secret#secret",
     requestHeaders: { Authorization: "Bearer top-secret" },
     requestBody: JSON.stringify({ model: "upstream-alpha", stream: false }),
   });
@@ -4667,6 +4668,7 @@ await runAsync("record store resets on start and supports full request id lookup
   assert.equal(await getRecordedRequest("abcdef"), undefined);
   assert.equal(record?.clientRequest.headers.Authorization, "[REDACTED]");
   assert.equal(record?.attempts[0].request.headers?.Authorization, "[REDACTED]");
+  assert.equal(record?.attempts[0].proxy, "http://proxy.example:7890/");
   assert.equal(record?.clientRequest.model, "alpha");
   assert.equal(record?.clientRequest.actualModel, "alpha");
   assert.equal(record?.clientRequest.source, "claudecode");
@@ -4900,6 +4902,7 @@ await runAsync("sqlite record store persists records and trims when max size shr
       provider: "openai-chat",
       modelName: "fallback-alpha",
       url: "https://example.com/v1/chat/completions",
+      proxy: "http://alice:secret@proxy.example:7890/?token=secret#secret",
       requestHeaders: { Authorization: "Bearer upstream-secret" },
       requestBody: JSON.stringify({ model: "upstream-alpha", stream: true }),
     });
@@ -4917,6 +4920,8 @@ await runAsync("sqlite record store persists records and trims when max size shr
     assert.ok(record);
     assert.equal(record?.clientRequest.headers.Authorization, "[REDACTED]");
     assert.equal(record?.attempts[0].request.headers?.Authorization, "[REDACTED]");
+    assert.equal(record?.attempts[0].proxy, "http://proxy.example:7890/");
+    assert.equal(JSON.stringify(record).includes("alice"), false);
     assert.equal(record?.clientRequest.source, "opencode");
     assert.equal(record?.clientRequest.status, "success");
     assert.equal(record?.clientRequest.actualModel, "fallback-alpha");
@@ -5486,6 +5491,37 @@ await runAsync("non-stream response compression skips small and unsupported resp
   assert.equal(await unsupported.text(), body);
 });
 
+await runAsync("failed provider proxy is recorded without direct retry", async () => {
+  useMemoryRecordStore();
+  await startRecording();
+  const proxy = http.createServer();
+  const targets: string[] = [];
+  proxy.on("connect", (request, socket) => {
+    targets.push(request.url!);
+    socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const address = proxy.address() as { port: number };
+  const proxyUrl = `http://127.0.0.1:${address.port}`;
+  const requestId = "proxyfail-1234-5678-9abc-def012345678";
+  try {
+    await runWithRequestId(requestId, async () => {
+      beginRecordedRequest({ requestId, path: "/v1/responses", headers: {}, body: { model: "alpha" }, stream: false });
+      await assert.rejects(passthroughRequest({
+        name: "alpha", provider: "openai-responses", base_url: "https://upstream.invalid", api_key: "dummy", model: "alpha", provider_proxy: proxyUrl,
+      }, { model: "alpha", input: "hello" }));
+    });
+    const record = await getRecordedRequest(requestId);
+    assert.deepEqual(targets, ["upstream.invalid:443"]);
+    assert.equal(record?.attempts.length, 1);
+    assert.equal(record?.attempts[0].proxy, proxyUrl + "/");
+    assert.ok(record?.attempts[0].error);
+  } finally {
+    await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    await stopRecording();
+  }
+});
+
 await runAsync("passthrough request records upstream request and response", async () => {
   await startRecording();
   const requestId = "12345678-1234-5678-9abc-def012345678";
@@ -5521,6 +5557,7 @@ await runAsync("passthrough request records upstream request and response", asyn
 
   const record = await getRecordedRequest(requestId);
   assert.ok(record);
+  assert.equal(record?.attempts[0].proxy, null);
   assert.equal(record?.attempts[0].response.status, 200);
   assert.equal(record?.attempts[0].response.headers?.["content-type"], "application/json");
   assert.equal(record?.attempts[0].request.headers?.Authorization, "[REDACTED]");

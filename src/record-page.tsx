@@ -1637,6 +1637,7 @@ const SCRIPT = String.raw`
             card.appendChild(head);
             appendKV(card, [
               ["url", attempt.url],
+              ["proxy", attempt.proxy === null ? "直连（未使用代理）" : attempt.proxy ?? "未记录（历史记录）"],
               ["status", attempt.response?.status],
               ["error", formatRecordedError(attempt.error)],
             ]);

@@ -394,6 +394,7 @@ async function upstreamFetchToUrl(
     provider: config.provider,
     modelName: options?.modelName ?? config.name,
     url,
+    proxy: proxyUrl ?? null,
     requestHeaders: fetchOptions.headers as Record<string, string>,
     requestBody: recordedRequestBody,
   });

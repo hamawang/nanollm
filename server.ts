@@ -61,7 +61,7 @@ import { openSqliteStorage } from "./src/sqlite.js";
 import { autoMigrateSqliteFileToTurso, resolveTursoAutoMigrationConfig } from "./src/turso-migration.js";
 import { buildAdminConfigForm, buildAdminConfigFormFromEffectiveConfig, buildYamlTextFromAdminForm, type AdminConfigForm } from "./src/admin-config-form.js";
 import { extractErrorCauses, formatErrorWithCauses } from "./src/error-details.js";
-import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, startDeviceLogin } from "./src/openai-subscription.js";
+import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -131,13 +131,13 @@ if (sqliteStorage?.driver === "turso") {
 }
 const configManager = new ConfigManager(configPath);
 const startupSnapshot = configManager.getActiveSnapshot();
-bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription").map((provider) => provider.name));
+bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
 if (sqliteStorage) {
   useSqliteRecordStore(sqliteStorage.client);
 }
 await startRecording({ maxSize: startupSnapshot.effectiveConfig.record.max_size });
 configManager.onUpdate(({ snapshot }, source) => {
-  bootstrapSubscriptionProviders(snapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription").map((provider) => provider.name));
+  bootstrapSubscriptionProviders(snapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
   void configureRecording({ maxSize: snapshot.effectiveConfig.record.max_size });
   if (source !== "startup") {
     console.log(
@@ -1190,7 +1190,13 @@ app.post("/record/:requestId/replay", async (c) => {
 
 app.get("/admin", (c) => c.html(renderAdminConfigPage(buildConfigAdminPayload())));
 app.post("/admin/providers/:name/device-login", async (c) => {
-  try { return c.json(await startDeviceLogin(c.req.param("name"))); }
+  try {
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === c.req.param("name"));
+    if (!provider || provider.provider !== "openai-subscription") {
+      return c.json({ error: "OpenAI subscription provider not found; save the provider configuration first" }, 404);
+    }
+    return c.json(await startDeviceLogin(provider));
+  }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
 });
 app.get("/admin/providers/:name/device-login/status", (c) => {
@@ -1198,8 +1204,25 @@ app.get("/admin/providers/:name/device-login/status", (c) => {
   return c.json({ authenticated: Boolean(credential?.accessToken && credential.expiresAt > Date.now()), expiresAt: credential?.expiresAt ?? null });
 });
 app.get("/admin/providers/:name/usage", async (c) => {
-  try { return c.json(await fetchSubscriptionUsage(c.req.param("name"))); }
+  try {
+    const name = c.req.param("name");
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (!provider || provider.provider !== "openai-subscription") {
+      return c.json({ error: "OpenAI subscription provider not found" }, 404);
+    }
+    return c.json(await fetchSubscriptionUsage(name, provider.proxy));
+  }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+});
+app.post("/admin/providers/:name/usage/reset", async (c) => {
+  try {
+    const name = c.req.param("name");
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (!provider || provider.provider !== "openai-subscription") return c.json({ error: "OpenAI subscription provider not found" }, 404);
+    return c.json(await resetSubscriptionUsage(name, provider.proxy));
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+  }
 });
 app.post("/admin/providers/:name/device-login/:sessionId/poll", async (c) => {
   try { return c.json(await pollDeviceLogin(c.req.param("sessionId"))); }
