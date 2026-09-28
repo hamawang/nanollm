@@ -990,7 +990,7 @@ const SCRIPT = /* js */ String.raw`
                   ? "5 小时窗口可用重置次数：" + resetCount
                   : "5 小时窗口可用重置次数：未能查询";
                 panel.appendChild(resetCountRow);
-                if (resetCount > 1) {
+                if (resetCount > 0) {
                   const resetButton = document.createElement("button");
                   resetButton.type = "button";
                   resetButton.className = "danger";
