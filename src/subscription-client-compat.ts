@@ -3,7 +3,7 @@ export const CODEX_CLI_VERSION = "0.146.0";
 export const CODEX_CLI_ORIGINATOR = "codex_cli_rs";
 export const CODEX_CLI_USER_AGENT = `${CODEX_CLI_ORIGINATOR}/${CODEX_CLI_VERSION} (Ubuntu 22.4.0; x86_64) xterm-256color`;
 
-export const CLAUDE_CODE_VERSION = "2.1.258";
+export const CLAUDE_CODE_VERSION = "2.1.284";
 export const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
 export const CLAUDE_CODE_BETA = "claude-code-20250219";
 export const CLAUDE_CLI_USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
@@ -19,11 +19,11 @@ export const CLAUDE_CODE_DEFAULT_HEADERS: Readonly<Record<string, string>> = {
   "User-Agent": CLAUDE_CLI_USER_AGENT,
   "x-app": "cli",
   "x-stainless-lang": "js",
-  "x-stainless-package-version": "0.94.0",
+  "x-stainless-package-version": "0.112.1",
   "x-stainless-os": "Linux",
   "x-stainless-arch": "arm64",
   "x-stainless-runtime": "node",
-  "x-stainless-runtime-version": "v24.3.0",
+  "x-stainless-runtime-version": "v26.3.0",
   "x-stainless-retry-count": "0",
   "x-stainless-timeout": "600",
   "anthropic-dangerous-direct-browser-access": "true",
