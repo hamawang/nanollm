@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { oauthPost, resolveOAuthTransportPath } from "../src/oauth-transport.js";
+import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, ensureClaudeSubscriptionCredential, getCachedClaudeSubscriptionCredential, parseClaudeCallback, startClaudeLogin } from "../src/claude-subscription.js";
+import { parseConfigText } from "../src/config.js";
+import { applyClaudeSubscriptionHeaders, getUpstreamURL } from "../src/proxy.js";
+import { runWithRequestId, setClientIp, setClientRequestHeaders } from "../src/request-context.js";
 import { bootstrapSubscriptionProviders, configureSubscriptionStorage, startDeviceLogin, pollDeviceLogin, ensureSubscriptionCredential, getCachedSubscriptionCredential } from "../src/openai-subscription.js";
 
 test("OAuth transport fails on proxy rejection without bypassing it", async () => {
@@ -56,6 +61,170 @@ console.log(JSON.stringify({status:200,body:JSON.stringify(payload)}));
     assert.equal(new URLSearchParams(requests[3].body).get("grant_type"), "refresh_token");
   } finally {
     bootstrapSubscriptionProviders([]);
+    process.chdir(previousCwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claude login URL uses Claude Code OAuth parameters and manual callback", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nanollm-claude-url-"));
+  try {
+    configureClaudeSubscriptionStorage(join(dir, "config.yaml"));
+    const login = startClaudeLogin({ name: "claude", provider: "claude-subscription", base_url: "", api_key: "" });
+    const url = new URL(login.authorizeUrl);
+    assert.equal(url.origin + url.pathname, "https://claude.com/cai/oauth/authorize");
+    assert.equal(url.searchParams.get("client_id"), "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
+    assert.equal(url.searchParams.get("redirect_uri"), "https://platform.claude.com/oauth/code/callback");
+    assert.equal(url.searchParams.get("code"), "true");
+    assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+    assert.ok(url.searchParams.get("scope")!.split(" ").includes("user:inference"));
+    assert.ok(url.searchParams.get("state"));
+    assert.equal(login.redirectUri, "https://platform.claude.com/oauth/code/callback");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claude callback parser accepts full URL and code#state text", () => {
+  assert.deepEqual(parseClaudeCallback("https://platform.claude.com/oauth/code/callback?code=abc&state=xyz"), { code: "abc", state: "xyz" });
+  assert.deepEqual(parseClaudeCallback("  abc#xyz \n"), { code: "abc", state: "xyz" });
+  assert.deepEqual(parseClaudeCallback("https://platform.claude.com/oauth/code/callback?code=abc%23xyz"), { code: "abc", state: "xyz" });
+  assert.throws(() => parseClaudeCallback("https://platform.claude.com/oauth/code/callback?error=access_denied"), /rejected/);
+  assert.throws(() => parseClaudeCallback("https://platform.claude.com/oauth/code/callback?state=xyz"), /code/);
+  assert.throws(() => parseClaudeCallback(""), /callback URL/);
+});
+
+test("claude login rejects a callback whose state does not match the session", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nanollm-claude-state-"));
+  try {
+    configureClaudeSubscriptionStorage(join(dir, "config.yaml"));
+    const login = startClaudeLogin({ name: "claude", provider: "claude-subscription", base_url: "", api_key: "" });
+    await assert.rejects(completeClaudeLogin(login.sessionId, "https://platform.claude.com/oauth/code/callback?code=abc&state=other"), /state/);
+    await assert.rejects(completeClaudeLogin("missing", "abc#xyz"), /过期/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claude subscription headers merge betas and default Claude Code identity", () => {
+  const headers: Record<string, string> = { "anthropic-beta": "interleaved-thinking-2025-05-14", "User-Agent": "curl/8" };
+  applyClaudeSubscriptionHeaders(headers);
+  assert.equal(headers["anthropic-beta"], "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
+  assert.equal(headers["x-app"], "cli");
+  assert.equal(headers["User-Agent"], "curl/8");
+
+  const fromClaudeCode: Record<string, string> = { "anthropic-beta": "oauth-2025-04-20,claude-code-20250219", "x-app": "cli", "User-Agent": "claude-cli/9.9.9 (external, cli)" };
+  applyClaudeSubscriptionHeaders(fromClaudeCode);
+  assert.equal(fromClaudeCode["anthropic-beta"], "oauth-2025-04-20,claude-code-20250219");
+  assert.equal(fromClaudeCode["User-Agent"], "claude-cli/9.9.9 (external, cli)");
+});
+
+test("claude subscription generates a daily stable session id from caller IP only when absent", () => {
+  const clientHeaders = new Headers({ "x-forwarded-for": "203.0.113.4" });
+  runWithRequestId("claude-session-default", () => {
+    setClientRequestHeaders(clientHeaders);
+    setClientIp("203.0.113.4");
+    const first: Record<string, string> = {};
+    applyClaudeSubscriptionHeaders(first);
+    const second: Record<string, string> = {};
+    applyClaudeSubscriptionHeaders(second);
+    assert.equal(first["x-claude-code-session-id"], second["x-claude-code-session-id"]);
+    assert.match(first["x-claude-code-session-id"], /^\d{4}-\d{2}-\d{2}-[a-f0-9]{24}$/);
+
+    const explicit: Record<string, string> = { "x-claude-code-session-id": "caller-session" };
+    applyClaudeSubscriptionHeaders(explicit);
+    assert.equal(explicit["x-claude-code-session-id"], "caller-session");
+  });
+});
+
+test("claude-subscription provider expands to an anthropic model and rejects base_url", () => {
+  const config = parseConfigText(`
+providers:
+  - name: claude
+    provider: claude-subscription
+    proxy: http://sub-proxy.example:7890
+models:
+  - name: sonnet
+    custom_provider: claude
+    model: claude-sonnet-4-5
+`);
+  const model = config.models[0];
+  assert.equal(model.provider, "anthropic");
+  assert.equal(model.claude_subscription_provider, "claude");
+  assert.equal(model.subscription_provider, undefined);
+  assert.equal(model.provider_proxy, "http://sub-proxy.example:7890");
+  assert.equal(getUpstreamURL(model), "https://api.anthropic.com/v1/messages?beta=true");
+  assert.throws(() => parseConfigText(`
+providers:
+  - name: claude
+    provider: claude-subscription
+    base_url: https://example.com
+models: []
+`), /cannot configure 'base_url' or 'api_key'/);
+});
+
+test("claude login exchanges code, stores credential and refreshes with rotated token", async (t) => {
+  if (process.platform === "win32" || resolveOAuthTransportPath()) return t.skip("Requires an isolated mock helper");
+  const previousCwd = process.cwd();
+  const previousDispatcher = getGlobalDispatcher();
+  const dir = mkdtempSync(join(tmpdir(), "nanollm-claude-oauth-test-"));
+  const helperDir = join(dir, "native/oauth-transport/target/release");
+  mkdirSync(helperDir, { recursive: true });
+  writeFileSync(join(helperDir, "nanollm-oauth-transport"), `#!/usr/bin/env node
+const fs = require('node:fs');
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+fs.appendFileSync('requests.jsonl', JSON.stringify(request) + '\\n');
+const body = JSON.parse(request.body);
+const payload = body.grant_type === 'authorization_code'
+  ? {access_token:'access-1',refresh_token:'refresh-1',expires_in:28800,scope:'user:profile user:inference',account:{uuid:'acct',email_address:'me@example.com'}}
+  : {access_token:'access-2',refresh_token:'refresh-2',expires_in:28800,scope:'user:profile user:inference'};
+console.log(JSON.stringify({status:200,body:JSON.stringify(payload)}));
+`, { mode: 0o755 });
+  const mockAgent = new MockAgent();
+  mockAgent.disableNetConnect();
+  mockAgent.get("https://api.anthropic.com").intercept({ path: "/api/oauth/profile", method: "GET" })
+    .reply(200, { account: { uuid: "acct", email: "me@example.com" }, organization: { uuid: "org", organization_type: "claude_max", rate_limit_tier: "default_claude_max_20x" } }).persist();
+  setGlobalDispatcher(mockAgent);
+  process.chdir(dir);
+  try {
+    configureClaudeSubscriptionStorage(join(dir, "config.yaml"));
+    const provider = { name: "claude", provider: "claude-subscription" as const, base_url: "", api_key: "" };
+    bootstrapClaudeSubscriptionProviders([provider]);
+    const login = startClaudeLogin(provider);
+    const state = new URL(login.authorizeUrl).searchParams.get("state")!;
+    const result = await completeClaudeLogin(login.sessionId, `https://platform.claude.com/oauth/code/callback?code=the-code&state=${encodeURIComponent(state)}`);
+    assert.equal(result.status, "authenticated");
+    assert.equal(result.subscriptionType, "max");
+    const stored = getCachedClaudeSubscriptionCredential("claude")!;
+    assert.equal(stored.accessToken, "access-1");
+    assert.equal(stored.email, "me@example.com");
+    const files = readdirSync(join(dir, "claude-subscription")).filter((file) => file.endsWith(".json"));
+    assert.equal(files.length, 1);
+    assert.equal(JSON.parse(readFileSync(join(dir, "claude-subscription", files[0]), "utf8")).providerName, "claude");
+
+    stored.expiresAt = 0;
+    const [first, second] = await Promise.all([ensureClaudeSubscriptionCredential("claude"), ensureClaudeSubscriptionCredential("claude")]);
+    assert.equal(first.accessToken, "access-2");
+    assert.equal(second.refreshToken, "refresh-2");
+    assert.equal(first.subscriptionType, "max");
+
+    const requests = readFileSync(join(dir, "requests.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(requests.length, 2, "concurrent refreshes must share one token request");
+    assert.equal(requests[0].url, "https://platform.claude.com/v1/oauth/token");
+    assert.equal(requests[0].headers["content-type"], "application/json");
+    const exchange = JSON.parse(requests[0].body);
+    assert.equal(exchange.grant_type, "authorization_code");
+    assert.equal(exchange.code, "the-code");
+    assert.equal(exchange.state, state);
+    assert.equal(exchange.redirect_uri, "https://platform.claude.com/oauth/code/callback");
+    assert.ok(exchange.code_verifier);
+    const refreshBody = JSON.parse(requests[1].body);
+    assert.equal(refreshBody.grant_type, "refresh_token");
+    assert.equal(refreshBody.refresh_token, "refresh-1");
+  } finally {
+    bootstrapClaudeSubscriptionProviders([]);
+    setGlobalDispatcher(previousDispatcher);
+    await mockAgent.close();
     process.chdir(previousCwd);
     rmSync(dir, { recursive: true, force: true });
   }

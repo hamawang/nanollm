@@ -34,7 +34,7 @@ import {
   denormalizeToAnthropicResponse,
 } from "./src/converters/responses.js";
 import { createSSEConverter, createUsageCollector, formatDone, SSEParser } from "./src/converters/streams.js";
-import { createRequestId, getRequestId, runWithRequestId, setClientRequestHeaders, withRequestId } from "./src/request-context.js";
+import { createRequestId, getRequestId, runWithRequestId, setClientIp, setClientRequestHeaders, withRequestId } from "./src/request-context.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "./src/response-cache.js";
 import {
   appendRecordedAttemptResponseBody,
@@ -62,6 +62,7 @@ import { autoMigrateSqliteFileToTurso, resolveTursoAutoMigrationConfig } from ".
 import { buildAdminConfigForm, buildAdminConfigFormFromEffectiveConfig, buildYamlTextFromAdminForm, type AdminConfigForm } from "./src/admin-config-form.js";
 import { extractErrorCauses, formatErrorWithCauses } from "./src/error-details.js";
 import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
+import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, fetchClaudeSubscriptionUsage, getCachedClaudeSubscriptionCredential, startClaudeLogin } from "./src/claude-subscription.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +119,7 @@ function resolveStorageMode(argv: string[]): StorageMode {
 const startupArgs = process.argv.slice(2);
 const configPath = resolveConfigPath(startupArgs);
 configureSubscriptionStorage(configPath);
+configureClaudeSubscriptionStorage(configPath);
 const storageMode = resolveStorageMode(startupArgs);
 const sqlitePath = join(homedir(), ".nanollm", "nanollm.sqlite3");
 const sqliteStorage = storageMode === "sqlite" ? await openSqliteStorage(sqlitePath) : undefined;
@@ -132,12 +134,14 @@ if (sqliteStorage?.driver === "turso") {
 const configManager = new ConfigManager(configPath);
 const startupSnapshot = configManager.getActiveSnapshot();
 bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
+bootstrapClaudeSubscriptionProviders(startupSnapshot.effectiveConfig.providers);
 if (sqliteStorage) {
   useSqliteRecordStore(sqliteStorage.client);
 }
 await startRecording({ maxSize: startupSnapshot.effectiveConfig.record.max_size });
 configManager.onUpdate(({ snapshot }, source) => {
   bootstrapSubscriptionProviders(snapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));
+  bootstrapClaudeSubscriptionProviders(snapshot.effectiveConfig.providers);
   void configureRecording({ maxSize: snapshot.effectiveConfig.record.max_size });
   if (source !== "startup") {
     console.log(
@@ -164,6 +168,7 @@ app.use("*", async (c, next) => {
 
   await runWithRequestId(requestId, async () => {
     setClientRequestHeaders(c.req.raw.headers);
+    setClientIp(c.req.raw.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || c.req.raw.headers.get("x-real-ip")?.trim() || c.req.raw.headers.get("cf-connecting-ip")?.trim() || undefined);
     emitLog(withRequestId(`[HTTP START] method=${c.req.method} path=${c.req.path}`));
 
     try {
@@ -483,7 +488,10 @@ async function testConfiguredModel(name: string, message: string, config: Server
   }
 
   const { path, body } = buildModelTestRequest(model.provider, model.name, message);
-  const headers = new Headers({ "content-type": "application/json", "user-agent": "nanollm-admin-model-test" });
+  const headers = new Headers({ "content-type": "application/json" });
+  if (!model.subscription_provider && !model.claude_subscription_provider) {
+    headers.set("user-agent", "nanollm-admin-model-test");
+  }
   if (config.auth?.token) headers.set("authorization", `Bearer ${config.auth.token}`);
 
   const requestId = createRequestId();
@@ -1242,16 +1250,37 @@ app.post("/admin/providers/:name/device-login", async (c) => {
   }
   catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
 });
+app.post("/admin/providers/:name/claude-login", (c) => {
+  try {
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === c.req.param("name"));
+    if (!provider || provider.provider !== "claude-subscription") {
+      return c.json({ error: "Claude subscription provider not found; save the provider configuration first" }, 404);
+    }
+    return c.json(startClaudeLogin(provider));
+  }
+  catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+});
+app.post("/admin/providers/:name/claude-login/:sessionId/complete", async (c) => {
+  try {
+    let body: { callback?: unknown } = {};
+    try { body = await c.req.json(); } catch {}
+    return c.json(await completeClaudeLogin(c.req.param("sessionId"), typeof body.callback === "string" ? body.callback : ""));
+  }
+  catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+});
 app.get("/admin/providers/:name/device-login/status", (c) => {
-  const credential = getCachedSubscriptionCredential(c.req.param("name"));
+  const name = c.req.param("name");
+  const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+  const credential = provider?.provider === "claude-subscription" ? getCachedClaudeSubscriptionCredential(name) : getCachedSubscriptionCredential(name);
   return c.json({ authenticated: Boolean(credential?.accessToken && credential.expiresAt > Date.now()), expiresAt: credential?.expiresAt ?? null });
 });
 app.get("/admin/providers/:name/usage", async (c) => {
   try {
     const name = c.req.param("name");
     const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (provider?.provider === "claude-subscription") return c.json(await fetchClaudeSubscriptionUsage(name, provider.proxy));
     if (!provider || provider.provider !== "openai-subscription") {
-      return c.json({ error: "OpenAI subscription provider not found" }, 404);
+      return c.json({ error: "Subscription provider not found" }, 404);
     }
     return c.json(await fetchSubscriptionUsage(name, provider.proxy));
   }

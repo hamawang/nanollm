@@ -5,6 +5,7 @@ interface RequestContextStore {
   requestId: string;
   responsesCustomToolNames: Set<string>;
   clientHeaders?: Headers;
+  clientIp?: string;
 }
 
 const requestContext = new AsyncLocalStorage<RequestContextStore>();
@@ -36,6 +37,15 @@ export function getRequestId(): string | undefined {
 export function setClientRequestHeaders(headers: Headers): void {
   const store = requestContext.getStore();
   if (store) store.clientHeaders = headers;
+}
+
+export function setClientIp(ip: string | undefined): void {
+  const store = requestContext.getStore();
+  if (store) store.clientIp = ip;
+}
+
+export function getClientIp(): string | undefined {
+  return requestContext.getStore()?.clientIp;
 }
 
 export function getClientRequestHeaders(): Headers | undefined {

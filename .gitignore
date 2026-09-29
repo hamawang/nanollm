@@ -9,4 +9,5 @@ dist-sea/
 native-bin/
 native/**/target/
 /openai-subscription/
+/claude-subscription/
 *~

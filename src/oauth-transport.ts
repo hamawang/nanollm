@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { CODEX_CLI_USER_AGENT } from "./subscription-client-compat.js";
 
 export interface OAuthTransportResponse { status: number; body: string; }
 
@@ -35,18 +36,19 @@ export async function oauthPost(
   body: URLSearchParams | string,
   contentType = "application/x-www-form-urlencoded",
   proxy?: string,
+  userAgent = CODEX_CLI_USER_AGENT,
 ): Promise<OAuthTransportResponse> {
   const helper = resolveOAuthTransportPath();
   if (!helper) {
     const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
     try {
-      const response = await undiciFetch(url, { method: "POST", headers: { "content-type": contentType, accept: "application/json", "user-agent": "codex_cli_rs" }, body, dispatcher, signal: AbortSignal.timeout(30_000) });
+      const response = await undiciFetch(url, { method: "POST", headers: { "content-type": contentType, accept: "application/json", "user-agent": userAgent }, body, dispatcher, signal: AbortSignal.timeout(30_000) });
       return { status: response.status, body: await response.text() };
     } finally {
       await dispatcher?.close();
     }
   }
-  const input = JSON.stringify({ url, proxy, headers: { "content-type": contentType, accept: "application/json", "user-agent": "codex_cli_rs" }, body: body.toString(), timeout_secs: 30 });
+  const input = JSON.stringify({ url, proxy, headers: { "content-type": contentType, accept: "application/json", "user-agent": userAgent }, body: body.toString(), timeout_secs: 30 });
   return new Promise((resolvePromise, reject) => {
     const child = execFile(helper, { timeout: 35_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) { reject(new Error(`OAuth transport failed: ${stderr.trim() || error.message}`)); return; }

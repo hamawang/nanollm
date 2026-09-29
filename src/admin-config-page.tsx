@@ -468,7 +468,8 @@ const STYLE = /* css */ String.raw`
 const SCRIPT = /* js */ String.raw`
       const INITIAL_PAYLOAD = __INITIAL_PAYLOAD__;
       const MODEL_PROVIDERS = ["openai-chat", "openai-responses", "anthropic", "openai-image"];
-      const PROVIDERS = [...MODEL_PROVIDERS, "openai-subscription"];
+      const SUBSCRIPTION_PROVIDERS = ["openai-subscription", "claude-subscription"];
+      const PROVIDERS = [...MODEL_PROVIDERS, ...SUBSCRIPTION_PROVIDERS];
       const RESERVED_MODEL_EXTRA_KEYS = new Set(["name", "provider", "custom_provider", "base_url", "api_key", "model", "proxy", "body_expression", "response_expression", "bodyExpression", "responseExpression"]);
       let saving = false;
       let dirty = false;
@@ -941,15 +942,17 @@ const SCRIPT = /* js */ String.raw`
           toggle.appendChild(toggleTop);
           const summary = document.createElement("div");
           summary.className = "card-summary";
-          summary.textContent = provider.provider === "openai-subscription"
-            ? "openai-subscription"
+          summary.textContent = SUBSCRIPTION_PROVIDERS.includes(provider.provider)
+            ? provider.provider
             : (provider.provider || "未选协议") + " · " + (provider.base_url || "未填 base_url");
           toggle.appendChild(summary);
           head.appendChild(toggle);
 
           const actions = document.createElement("div");
           actions.className = "card-actions";
-          if (provider.provider === "openai-subscription") {
+          if (SUBSCRIPTION_PROVIDERS.includes(provider.provider)) {
+            const isClaude = provider.provider === "claude-subscription";
+            const markAuthenticated = () => { status.textContent = "已登录"; status.className = "success"; loginButton.textContent = "重新登录"; usageButton.hidden = false; };
             const status = document.createElement("span");
             status.className = "meta";
             status.textContent = "检查登录状态…";
@@ -962,6 +965,7 @@ const SCRIPT = /* js */ String.raw`
                 const text = await response.text();
                 let payload; try { payload = JSON.parse(text); } catch { payload = { error: text.slice(0, 240) }; }
                 if (!response.ok) throw new Error(payload.error || "用量查询失败");
+                if (isClaude) { showClaudeUsageDialog(payload); return; }
                 const dialog = document.createElement("dialog");
                 const panel = document.createElement("div");
                 panel.style.minWidth = "420px";
@@ -1039,6 +1043,7 @@ const SCRIPT = /* js */ String.raw`
               if (dirty) { window.alert("页面有未保存的修改，请先保存配置，再登录。登录将使用已保存的供应商代理。"); return; }
               const name = (provider.name || "").trim();
               if (!name) { window.alert("请先填写供应商名称并保存配置。"); return; }
+              if (isClaude) { await runClaudeLogin(name, markAuthenticated); return; }
               try {
                 const start = await fetch("/admin/providers/" + encodeURIComponent(name) + "/device-login", { method: "POST" });
                 const startText = await start.text();
@@ -1056,7 +1061,7 @@ const SCRIPT = /* js */ String.raw`
                   const pollText = await poll.text();
                   let result; try { result = JSON.parse(pollText); } catch { result = { error: pollText.slice(0, 240) }; }
                   if (!poll.ok) throw new Error(result.error || "设备登录失败");
-                  if (result.status === "authenticated") { status.textContent = "已登录"; status.className = "success"; loginButton.textContent = "重新登录"; usageButton.hidden = false; window.alert("OpenAI subscription 登录成功。"); return; }
+                  if (result.status === "authenticated") { markAuthenticated(); window.alert("OpenAI subscription 登录成功。"); return; }
                   await new Promise((resolve) => setTimeout(resolve, Math.max(2000, Number(result.retryAfter || payload.interval || 5) * 1000)));
                 }
                 throw new Error("设备登录超时，请重新尝试。");
@@ -1089,8 +1094,8 @@ const SCRIPT = /* js */ String.raw`
             }
             markDirty(true);
           } });
-          bindField(grid, "provider", { type: "select", options: PROVIDERS, value: provider.provider || PROVIDERS[0], onInput(value) { provider.provider = value; if (value === "openai-subscription") { provider.base_url = ""; provider.api_key = ""; } markDirty(true); renderAll(); } });
-          if (provider.provider === "openai-subscription") {
+          bindField(grid, "provider", { type: "select", options: PROVIDERS, value: provider.provider || PROVIDERS[0], onInput(value) { provider.provider = value; if (SUBSCRIPTION_PROVIDERS.includes(value)) { provider.base_url = ""; provider.api_key = ""; } markDirty(true); renderAll(); } });
+          if (SUBSCRIPTION_PROVIDERS.includes(provider.provider)) {
             const note = document.createElement("div"); note.className = "helper"; note.textContent = "Base URL 和 API key 由订阅登录自动管理。请先保存供应商及代理配置，再点击登录。"; grid.appendChild(note);
           } else {
             bindField(grid, "base_url", { value: provider.base_url, placeholder: "https://example.com/v1", onInput(value) { provider.base_url = value; markDirty(true); } });
@@ -1100,13 +1105,110 @@ const SCRIPT = /* js */ String.raw`
             spanClass: "span-2",
             value: provider.proxy || "",
             placeholder: "http://127.0.0.1:7890",
-            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。OpenAI 订阅登录、凭证刷新和用量查询也使用此代理；修改后请先保存配置。",
+            helper: "可选。引用该供应商的模型调用上游时使用的 HTTP proxy；优先级：模型 proxy > 供应商 proxy > HTTPS_PROXY/HTTP_PROXY。订阅（OpenAI / Claude）登录、凭证刷新和用量查询也使用此代理；修改后请先保存配置。",
             onInput(value) { provider.proxy = value; markDirty(true); },
           });
           body.appendChild(grid);
           card.appendChild(body);
           providersContainer.appendChild(card);
         });
+      }
+
+      function readJsonResponse(text) {
+        try { return JSON.parse(text); } catch { return { error: String(text || "").slice(0, 240) }; }
+      }
+
+      function showClaudeUsageDialog(payload) {
+        const dialog = document.createElement("dialog");
+        const panel = document.createElement("div");
+        panel.style.minWidth = "420px";
+        const heading = document.createElement("h3"); heading.textContent = "Claude 订阅用量";
+        const plan = document.createElement("p"); plan.className = "meta";
+        plan.textContent = "Plan: " + (payload.subscription_type || "unknown") + (payload.rate_limit_tier ? " · " + payload.rate_limit_tier : "") + (payload.email ? " · " + payload.email : "");
+        panel.append(heading, plan);
+        const labels = { five_hour: "5 小时窗口", seven_day: "7 天窗口", seven_day_opus: "7 天窗口 · Opus", seven_day_sonnet: "7 天窗口 · Sonnet", seven_day_oauth_apps: "7 天窗口 · OAuth 应用" };
+        const order = Object.keys(labels);
+        const rank = (key) => order.indexOf(key) < 0 ? order.length : order.indexOf(key);
+        const entries = Object.entries(payload)
+          .filter(([key, value]) => key !== "extra_usage" && value && typeof value === "object" && !Array.isArray(value) && "utilization" in value)
+          .sort(([a], [b]) => rank(a) - rank(b));
+        entries.forEach(([key, value]) => {
+          const row = document.createElement("p");
+          const used = Number(value.utilization);
+          const resetAt = value.resets_at ? new Date(value.resets_at) : null;
+          const usedText = value.utilization !== null && Number.isFinite(used) ? Math.round(used * 10) / 10 + "%" : "未知";
+          const resetText = resetAt && !Number.isNaN(resetAt.getTime()) ? resetAt.toLocaleString() : "未知";
+          row.textContent = (labels[key] || key.replace(/_/g, " ")) + " · 已用 " + usedText + " · 重置 " + resetText;
+          panel.appendChild(row);
+        });
+        if (entries.length === 0) {
+          const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "未返回用量窗口数据。";
+          panel.appendChild(empty);
+        }
+        const extra = payload.extra_usage;
+        if (extra && typeof extra === "object") {
+          const row = document.createElement("p"); row.className = "meta";
+          const extraPercent = extra.utilization !== null && Number.isFinite(Number(extra.utilization)) ? "（" + Number(extra.utilization) + "%）" : "";
+          row.textContent = extra.is_enabled
+            ? "额外用量：已开启 · 已用 " + (extra.used_credits ?? "未知") + " / " + (extra.monthly_limit ?? "不限") + extraPercent
+            : "额外用量：未开启";
+          panel.appendChild(row);
+        }
+        const close = document.createElement("button"); close.type = "button"; close.textContent = "关闭"; close.addEventListener("click", () => dialog.close());
+        panel.appendChild(close); dialog.appendChild(panel); document.body.appendChild(dialog);
+        dialog.addEventListener("close", () => dialog.remove(), { once: true });
+        dialog.showModal();
+      }
+
+      async function runClaudeLogin(name, onAuthenticated) {
+        let payload;
+        try {
+          const start = await fetch("/admin/providers/" + encodeURIComponent(name) + "/claude-login", { method: "POST" });
+          payload = readJsonResponse(await start.text());
+          if (!start.ok) throw new Error(payload.error || "无法发起 Claude 登录");
+        } catch (error) { window.alert(error instanceof Error ? error.message : String(error)); return; }
+        window.open(payload.authorizeUrl, "_blank", "noopener");
+        const dialog = document.createElement("dialog");
+        const panel = document.createElement("div");
+        panel.style.minWidth = "480px";
+        panel.style.maxWidth = "640px";
+        const heading = document.createElement("h3"); heading.textContent = "Claude subscription 登录";
+        const steps = document.createElement("p");
+        steps.textContent = "1. 在新打开的页面中登录 Claude 并点击授权。2. 授权后浏览器会跳转到 callback 页面（" + payload.redirectUri + "?code=...），复制地址栏中的完整 URL（或页面上显示的 code#state 授权码）粘贴到下方。";
+        const link = document.createElement("a"); link.href = payload.authorizeUrl; link.target = "_blank"; link.rel = "noopener"; link.textContent = "未自动打开？点此打开授权页面";
+        const input = document.createElement("textarea"); input.rows = 4; input.style.width = "100%"; input.placeholder = payload.redirectUri + "?code=...&state=...";
+        const error = document.createElement("p"); error.className = "error"; error.style.color = "#b42318"; error.hidden = true;
+        const actions = document.createElement("p");
+        const submit = document.createElement("button"); submit.type = "button"; submit.textContent = "完成登录";
+        const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; cancel.textContent = "取消";
+        actions.append(submit, " ", cancel);
+        panel.append(heading, steps, link, input, error, actions);
+        dialog.appendChild(panel); document.body.appendChild(dialog);
+        dialog.addEventListener("close", () => dialog.remove(), { once: true });
+        cancel.addEventListener("click", () => dialog.close());
+        submit.addEventListener("click", async () => {
+          const callback = input.value.trim();
+          if (!callback) { error.textContent = "请粘贴完整的 callback URL。"; error.hidden = false; return; }
+          submit.disabled = true; submit.textContent = "登录中…"; error.hidden = true;
+          try {
+            const response = await fetch("/admin/providers/" + encodeURIComponent(name) + "/claude-login/" + encodeURIComponent(payload.sessionId) + "/complete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ callback }),
+            });
+            const result = readJsonResponse(await response.text());
+            if (!response.ok) throw new Error(result.error || "Claude 登录失败");
+            dialog.close();
+            onAuthenticated();
+            window.alert("Claude subscription 登录成功" + (result.email ? "：" + result.email : "") + (result.subscriptionType ? "（" + result.subscriptionType + "）" : "") + "。");
+          } catch (err) {
+            error.textContent = err instanceof Error ? err.message : String(err);
+            error.hidden = false;
+            submit.disabled = false; submit.textContent = "完成登录";
+          }
+        });
+        dialog.showModal();
+        input.focus();
       }
 
       function createActionButton(label, className, onClick) {
@@ -1139,7 +1241,9 @@ const SCRIPT = /* js */ String.raw`
       function getEffectiveModelProvider(model) {
         if (model.connection_mode !== "custom") return model.provider;
         const provider = formState.providers.find((item) => item.name === model.custom_provider);
-        return provider?.provider === "openai-subscription" ? "openai-responses" : provider?.provider;
+        if (provider?.provider === "openai-subscription") return "openai-responses";
+        if (provider?.provider === "claude-subscription") return "anthropic";
+        return provider?.provider;
       }
 
       function getModelTestPreview(text) {
