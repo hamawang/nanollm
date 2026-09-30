@@ -28,10 +28,14 @@ import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { buildAdminConfigForm, buildYamlTextFromAdminForm } from "../src/admin-config-form.js";
 import { buildModelTestRequest, extractModelTestReply } from "../src/model-test.js";
+import { buildSubscriptionModelsRequest } from "../src/openai-subscription.js";
+import { buildClaudeModelsHeaders } from "../src/claude-subscription.js";
+import { CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT, CODEX_CLI_VERSION } from "../src/subscription-client-compat.js";
+import { extractUpstreamModelIds, fetchUpstreamModels } from "../src/upstream-models.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
-import { applyCodexSubscriptionHeaders, forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
+import { applyClaudeSubscriptionHeaders, applyCodexSubscriptionHeaders, forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "../src/response-cache.js";
 import { buildNonStreamResponse, RESPONSE_COMPRESSION_THRESHOLD_BYTES } from "../src/response-compression.js";
 import { renderRecordPage } from "../src/record-page.js";
@@ -5948,4 +5952,173 @@ run("startup error disposes resources and exits on occupied port", () => {
   assert.deepEqual(calls, ["dispose", "exit:1"]);
   assert.equal(logs[0]?.[0], "Failed to start nanollm: port 3000 is already in use.");
   assert.equal(logs[1]?.[0], "Use a different port in config.yaml, stop the other process, or set PORT.");
+});
+
+run("upstream model ids are extracted from openai, anthropic and bare list payloads", () => {
+  assert.deepEqual(extractUpstreamModelIds({ data: [{ id: "a" }, { id: " b " }, { id: "" }, { name: "x" }, null] }), ["a", "b"]);
+  assert.deepEqual(extractUpstreamModelIds({ models: [{ id: "m1" }, "m2"] }), ["m1", "m2"]);
+  assert.deepEqual(extractUpstreamModelIds([{ id: "z" }]), ["z"]);
+  assert.deepEqual(extractUpstreamModelIds({ error: "nope" }), []);
+});
+
+await runAsync("fetchUpstreamModels calls /models with openai bearer auth and env-resolved key", async () => {
+  process.env.NANOLLM_TEST_MODELS_KEY = "env-secret";
+  const seen: { url?: string; auth?: string } = {};
+  await withHTTPServer((req, res) => {
+    seen.url = req.url;
+    seen.auth = String(req.headers.authorization);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ data: [{ id: "gpt-b" }, { id: "gpt-a" }, { id: "gpt-b" }] }));
+  }, async (baseURL) => {
+    const ids = await fetchUpstreamModels(
+      { provider: "openai-chat", base_url: baseURL + "/v1/", api_key: "${NANOLLM_TEST_MODELS_KEY}" },
+      { env: {} },
+    );
+    assert.deepEqual(ids, ["gpt-a", "gpt-b"]);
+  });
+  assert.equal(seen.url, "/v1/models");
+  assert.equal(seen.auth, "Bearer env-secret");
+  delete process.env.NANOLLM_TEST_MODELS_KEY;
+});
+
+await runAsync("fetchUpstreamModels pages anthropic models with x-api-key", async () => {
+  const seen: { key?: string; version?: string; urls: string[] } = { urls: [] };
+  await withHTTPServer((req, res) => {
+    seen.urls.push(String(req.url));
+    seen.key = String(req.headers["x-api-key"]);
+    seen.version = String(req.headers["anthropic-version"]);
+    res.setHeader("content-type", "application/json");
+    const paged = String(req.url).includes("after_id=c2");
+    res.end(JSON.stringify(paged
+      ? { data: [{ id: "c3" }], has_more: false, last_id: "c3" }
+      : { data: [{ id: "c1" }, { id: "c2" }], has_more: true, last_id: "c2" }));
+  }, async (baseURL) => {
+    const ids = await fetchUpstreamModels({ provider: "anthropic", base_url: baseURL + "/v1", api_key: "k" }, { env: {} });
+    assert.deepEqual(ids, ["c1", "c2", "c3"]);
+  });
+  assert.equal(seen.key, "k");
+  assert.equal(seen.version, "2023-06-01");
+  assert.deepEqual(seen.urls, ["/v1/models?limit=1000", "/v1/models?limit=1000&after_id=c2"]);
+});
+
+await runAsync("fetchUpstreamModels reports upstream errors and invalid input", async () => {
+  await withHTTPServer((_req, res) => {
+    res.statusCode = 401;
+    res.end("bad key");
+  }, async (baseURL) => {
+    await assert.rejects(
+      fetchUpstreamModels({ provider: "openai-chat", base_url: baseURL, api_key: "x" }, { env: {} }),
+      /HTTP 401.*bad key/,
+    );
+  });
+  await assert.rejects(fetchUpstreamModels({ provider: "openai-subscription", base_url: "http://x", api_key: "" }), /不支持/);
+  await assert.rejects(fetchUpstreamModels({ provider: "openai-chat", base_url: " ", api_key: "" }), /base_url/);
+});
+
+run("admin page disables testing unsaved models and groups custom provider models", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function isModelSaved\(model\)/);
+  assert.match(html, /if \(!isModelSaved\(model\)\) \{/);
+  assert.match(html, /testButton\.disabled = true/);
+  assert.match(html, /"\/admin\/upstream-models"/);
+  assert.match(html, /function openFetchModelsDialog\(provider\)/);
+  assert.match(html, /createActionButton\("拉取模型"/);
+  assert.match(html, /"全选"/);
+  assert.match(html, /function buildModelGroupCard/);
+  assert.match(html, /const expandedModelGroups = new Set\(\)/);
+  assert.match(html, /加供应商名后缀/);
+  assert.match(html, /createActionButton\("删除全部模型"/);
+  assert.match(html, /function isGroupSuffixed\(providerName\)/);
+});
+
+run("codex catalog payloads expose models by slug", () => {
+  assert.deepEqual(extractUpstreamModelIds({ models: [{ slug: "gpt-5-codex", display_name: "GPT-5 Codex" }, { slug: "gpt-5" }] }), ["gpt-5-codex", "gpt-5"]);
+});
+
+run("admin page fetches subscription models from saved credentials and lists provider groups first", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /"\/admin\/providers\/" \+ encodeURIComponent\(providerName\) \+ "\/models"/);
+  assert.doesNotMatch(html, /if \(!SUBSCRIPTION_PROVIDERS\.includes\(provider\.provider\)\) \{\n\s+actions\.appendChild\(createActionButton\("拉取模型"/);
+  assert.match(html, /const showHeadings = groupKeys\.length > 0 && standalone\.length > 0/);
+  assert.match(html, /\.card\.group-card \{/);
+  assert.match(html, /kindBadge\.textContent = "供应商"/);
+});
+
+run("admin page marks conflicting model and fallback names at provider, model and banner level", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function getNameConflicts\(\)/);
+  assert.match(html, /formState\.fallbackGroups\.forEach\(\(group\) => add\(normalizeModelRef\(group\.name\), \{ label: "fallback 分组"/);
+  assert.match(html, /function buildConflictBanner\(conflicts\)/);
+  assert.match(html, /function locateModel\(model\)/);
+  assert.match(html, /个模型名冲突/);
+  assert.match(html, /badge\.textContent = "⚠ 名称冲突"/);
+  assert.match(html, /invalid: Boolean\(nameConflict\)/);
+  assert.match(html, /invalid: Boolean\(groupNameSources\)/);
+  assert.match(html, /\.card\.group-card\.conflict \{/);
+});
+
+run("admin page links provider cards to their model groups and back", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function locateModelGroup\(providerName\)/);
+  assert.match(html, /function locateProvider\(provider\)/);
+  assert.match(html, /" 个模型" \+ \(conflictedCount > 0/);
+  assert.match(html, /modelsLink\.disabled = providerModels\.length === 0/);
+  assert.match(html, /card\.setAttribute\("data-model-group", providerName\)/);
+  assert.match(html, /createActionButton\("编辑供应商"/);
+});
+
+run("codex model catalog request carries the Codex CLI identity and a version at or above the upstream floor", () => {
+  const { url, headers } = buildSubscriptionModelsRequest("tok", "acct-1");
+  assert.equal(url, `https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_CLI_VERSION}`);
+  assert.equal(headers.Authorization, "Bearer tok");
+  assert.equal(headers["ChatGPT-Account-Id"], "acct-1");
+  assert.equal(headers.Originator, CODEX_CLI_ORIGINATOR);
+  assert.equal(headers["User-Agent"], CODEX_CLI_USER_AGENT);
+  assert.equal(headers.Version, CODEX_CLI_VERSION);
+  // Originator must pair with the User-Agent prefix, and older versions are rejected upstream (sub2api #3901).
+  assert.ok(CODEX_CLI_USER_AGENT.startsWith(CODEX_CLI_ORIGINATOR + "/" + CODEX_CLI_VERSION));
+  const [major, minor] = CODEX_CLI_VERSION.split(".").map(Number);
+  assert.ok(major > 0 || minor >= 144);
+  assert.equal("ChatGPT-Account-Id" in buildSubscriptionModelsRequest("tok").headers, false);
+});
+
+run("claude model list request uses the Claude Code identity headers over the plain oauth fallback", () => {
+  const identity: Record<string, string> = {};
+  applyClaudeSubscriptionHeaders(identity);
+  const headers = buildClaudeModelsHeaders("tok", identity);
+  assert.equal(headers.Authorization, "Bearer tok");
+  assert.equal(headers["anthropic-version"], "2023-06-01");
+  assert.match(headers["anthropic-beta"], /claude-code-20250219/);
+  assert.match(headers["anthropic-beta"], /oauth-2025-04-20/);
+  assert.match(headers["User-Agent"], /^claude-cli\//);
+  assert.equal(headers["x-app"], "cli");
+  assert.equal(headers.Accept, "application/json");
+
+  const fallback = buildClaudeModelsHeaders("tok");
+  assert.equal(fallback["anthropic-beta"], "oauth-2025-04-20");
+  assert.equal(fallback.Authorization, "Bearer tok");
 });

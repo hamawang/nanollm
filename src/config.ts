@@ -83,7 +83,7 @@ export function getPublicModelNames(config: ServerConfig): string[] {
   return [...Object.keys(config.fallback), ...config.models.map((model) => model.name)];
 }
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string): string {
   return value.replace(/\$\{(\w+)\}/g, (_, key) => process.env[key] ?? "");
 }
 

@@ -5,6 +5,7 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { CustomProviderConfig } from "./config.js";
 import { oauthPost } from "./oauth-transport.js";
 import { CLAUDE_CODE_USER_AGENT, CLAUDE_OAUTH_BETA } from "./subscription-client-compat.js";
+import { extractUpstreamModelIds } from "./upstream-models.js";
 
 export { CLAUDE_CLI_USER_AGENT, CLAUDE_CODE_BETA, CLAUDE_OAUTH_BETA } from "./subscription-client-compat.js";
 
@@ -271,6 +272,57 @@ export async function ensureClaudeSubscriptionCredential(name: string) {
 }
 
 export function getCachedClaudeSubscriptionCredential(name: string) { return load(name); }
+
+/**
+ * Headers for the Claude model list. `identityHeaders` should carry the Claude Code fingerprint and betas
+ * (applyClaudeSubscriptionHeaders): Claude Code OAuth credentials are scoped to Claude Code, and sub2api sends
+ * the full CLI identity on this request too. Without them we fall back to the OAuth beta only.
+ */
+export function buildClaudeModelsHeaders(accessToken: string, identityHeaders: Record<string, string> = {}): Record<string, string> {
+  return {
+    Accept: "application/json",
+    "User-Agent": CLAUDE_CODE_USER_AGENT,
+    "anthropic-beta": CLAUDE_OAUTH_BETA,
+    ...identityHeaders,
+    Authorization: `Bearer ${accessToken}`,
+    "anthropic-version": "2023-06-01",
+  };
+}
+
+/** List the models available to the Claude account (`/v1/models` with the OAuth bearer token), following pagination. */
+export async function fetchClaudeSubscriptionModels(name: string, proxyUrl?: string, identityHeaders: Record<string, string> = {}): Promise<string[]> {
+  let credential = await ensureClaudeSubscriptionCredential(name);
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  const ids: string[] = [];
+  try {
+    let afterId: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const url = `${API_BASE_URL}/v1/models?limit=1000${afterId ? `&after_id=${encodeURIComponent(afterId)}` : ""}`;
+      const request = () => undiciFetch(url, {
+        dispatcher,
+        headers: buildClaudeModelsHeaders(credential.accessToken, identityHeaders),
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
+      });
+      let response = await request();
+      if (response.status === 401 && credential.refreshToken) {
+        await response.body?.cancel();
+        credential = await refresh(name);
+        response = await request();
+      }
+      const text = await response.text();
+      if (!response.ok) throw new Error(response.status === 401 ? "Claude authorization expired; please sign in again" : `Claude models request failed (${response.status}): ${text.slice(0, 240)}`);
+      let payload: any;
+      try { payload = JSON.parse(text); } catch { throw new Error("Claude models response is not valid JSON"); }
+      ids.push(...extractUpstreamModelIds(payload));
+      if (payload?.has_more !== true || typeof payload.last_id !== "string") break;
+      afterId = payload.last_id;
+    }
+  } finally {
+    await dispatcher?.close();
+  }
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
 
 export async function fetchClaudeSubscriptionUsage(name: string, proxyUrl?: string) {
   let credential = await ensureClaudeSubscriptionCredential(name);

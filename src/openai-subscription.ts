@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { CustomProviderConfig } from "./config.js";
 import { oauthPost } from "./oauth-transport.js";
+import { CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT, CODEX_CLI_VERSION } from "./subscription-client-compat.js";
+import { extractUpstreamModelIds } from "./upstream-models.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEVICE_USER_CODE_URL = "https://auth.openai.com/api/accounts/deviceauth/usercode";
@@ -165,6 +167,48 @@ export async function ensureSubscriptionCredential(name: string) {
   throw new Error(`OpenAI subscription provider '${name}' is not authenticated. Start device login from the admin page.`);
 }
 export function getCachedSubscriptionCredential(name: string) { return load(name); }
+/**
+ * Request for the Codex model catalog. Mirrors the identity sub2api sends: `Originator` must pair with the
+ * `User-Agent` prefix and `Version` must match `client_version` (and stay >= 0.144.0, older values 404 upstream).
+ */
+export function buildSubscriptionModelsRequest(accessToken: string, accountId?: string): { url: string; headers: Record<string, string> } {
+  return {
+    url: `${SUBSCRIPTION_URL}/models?client_version=${encodeURIComponent(CODEX_CLI_VERSION)}`,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+      Originator: CODEX_CLI_ORIGINATOR,
+      "User-Agent": CODEX_CLI_USER_AGENT,
+      Version: CODEX_CLI_VERSION,
+    },
+  };
+}
+
+/** List the models available to the ChatGPT account through the Codex catalog endpoint (`/models?client_version=`). */
+export async function fetchSubscriptionModels(name: string, proxyUrl?: string): Promise<string[]> {
+  let credential = await ensureSubscriptionCredential(name);
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  try {
+    const request = () => {
+      const { url, headers } = buildSubscriptionModelsRequest(credential.accessToken, credential.accountId);
+      return undiciFetch(url, { dispatcher, headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+    };
+    let response = await request();
+    if (response.status === 401 && credential.refreshToken) {
+      await response.body?.cancel();
+      credential = await refresh(name);
+      response = await request();
+    }
+    const text = await response.text();
+    if (!response.ok) throw new Error(response.status === 401 ? "OpenAI authorization expired; please sign in again" : `OpenAI models request failed (${response.status}): ${text.slice(0, 240)}`);
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { throw new Error("OpenAI models response is not valid JSON"); }
+    return [...new Set(extractUpstreamModelIds(payload))].sort((a, b) => a.localeCompare(b));
+  } finally {
+    await dispatcher?.close();
+  }
+}
 export async function fetchSubscriptionUsage(name: string, proxyUrl?: string) {
   let credential = await ensureSubscriptionCredential(name);
   if (!credential.accountId) throw new Error(`OpenAI subscription provider '${name}' is missing an account ID`);

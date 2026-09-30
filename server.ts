@@ -12,7 +12,7 @@ import type { ModelConfig, ServerConfig } from "./src/config.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "./src/auth.js";
 import { getPublicModelNames, parseConfigText, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
-import { getUpstreamURL } from "./src/proxy.js";
+import { applyClaudeSubscriptionHeaders, getUpstreamURL } from "./src/proxy.js";
 import { forwardRequest, forwardStreamRequest, passthroughAlphaSearchRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
@@ -21,6 +21,7 @@ import { SqliteUsageStore, UsageStore, addLocalDays, formatLocalDay, getUsageYea
 import { renderRecordPage } from "./src/record-page.js";
 import { renderAdminConfigPage } from "./src/admin-config-page.js";
 import { buildModelTestRequest, DEFAULT_MODEL_TEST_MESSAGE, extractModelTestReply } from "./src/model-test.js";
+import { fetchUpstreamModels } from "./src/upstream-models.js";
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import { buildJsonResponse, buildNonStreamResponse } from "./src/response-compression.js";
 import {
@@ -61,8 +62,8 @@ import { openSqliteStorage } from "./src/sqlite.js";
 import { autoMigrateSqliteFileToTurso, resolveTursoAutoMigrationConfig } from "./src/turso-migration.js";
 import { buildAdminConfigForm, buildAdminConfigFormFromEffectiveConfig, buildYamlTextFromAdminForm, type AdminConfigForm } from "./src/admin-config-form.js";
 import { extractErrorCauses, formatErrorWithCauses } from "./src/error-details.js";
-import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
-import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, fetchClaudeSubscriptionUsage, getCachedClaudeSubscriptionCredential, startClaudeLogin } from "./src/claude-subscription.js";
+import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionModels, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
+import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, fetchClaudeSubscriptionModels, fetchClaudeSubscriptionUsage, getCachedClaudeSubscriptionCredential, startClaudeLogin } from "./src/claude-subscription.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -1315,6 +1316,37 @@ app.post("/admin/models/:name/test", async (c) => {
     return c.json(result, result.ok ? 200 : result.status);
   } catch (error) {
     return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+});
+app.get("/admin/providers/:name/models", async (c) => {
+  try {
+    const name = c.req.param("name");
+    const provider = configManager.getActiveSnapshot().effectiveConfig.providers.find((item) => item.name === name);
+    if (provider?.provider === "claude-subscription") {
+      const identityHeaders: Record<string, string> = {};
+      applyClaudeSubscriptionHeaders(identityHeaders);
+      return c.json({ ok: true, models: await fetchClaudeSubscriptionModels(name, provider.proxy, identityHeaders) });
+    }
+    if (provider?.provider === "openai-subscription") return c.json({ ok: true, models: await fetchSubscriptionModels(name, provider.proxy) });
+    return c.json({ ok: false, error: "订阅供应商不在当前生效的配置中，请先保存配置。" }, 404);
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
+  }
+});
+app.post("/admin/upstream-models", async (c) => {
+  let body: Record<string, unknown> = {};
+  try { body = await c.req.json(); } catch {}
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  try {
+    const models = await fetchUpstreamModels({
+      provider: text(body.provider),
+      base_url: text(body.base_url),
+      api_key: text(body.api_key),
+      proxy: text(body.proxy),
+    });
+    return c.json({ ok: true, models });
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
   }
 });
 app.post("/admin/config/apply", async (c) => {

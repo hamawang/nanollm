@@ -115,6 +115,133 @@ const STYLE = /* css */ String.raw`
         opacity: 0.6;
         cursor: wait;
       }
+      button[data-blocked]:disabled {
+        cursor: not-allowed;
+      }
+      .suffix-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+      }
+      .suffix-toggle input {
+        width: auto;
+        margin: 0;
+      }
+      .subhead {
+        margin-top: 4px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .card.group-card {
+        border-color: rgba(143, 91, 51, 0.4);
+        border-left: 5px solid var(--accent);
+        background: linear-gradient(90deg, rgba(143, 91, 51, 0.09), rgba(255, 251, 244, 0.9) 45%);
+      }
+      .card.group-card > .card-head .card-chevron {
+        background: var(--accent);
+        color: #fff9f1;
+      }
+      button.models-link.conflict {
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+      .pill.conflict {
+        background: var(--danger);
+        color: #fff9f1;
+      }
+      .card.conflict {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 1px rgba(191, 76, 59, 0.35);
+      }
+      .card.group-card.conflict {
+        border-color: var(--danger);
+        border-left-color: var(--danger);
+      }
+      input.invalid {
+        border-color: var(--danger);
+        background: #fff5f3;
+      }
+      .conflict-banner {
+        display: grid;
+        gap: 8px;
+      }
+      .conflict-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .conflict-row button {
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+      .pill.kind {
+        background: var(--accent);
+        color: #fff9f1;
+      }
+      .group-body .card {
+        background: rgba(255, 253, 249, 0.95);
+        border-color: rgba(143, 91, 51, 0.14);
+      }
+      .group-body {
+        display: grid;
+        gap: 12px;
+        padding-left: 12px;
+        border-left: 2px solid rgba(143, 91, 51, 0.18);
+      }
+      .group-body[hidden] {
+        display: none;
+      }
+      .fetch-model-toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .fetch-model-toolbar input {
+        flex: 1;
+      }
+      .fetch-model-list {
+        display: grid;
+        gap: 2px;
+        max-height: 340px;
+        overflow: auto;
+        padding: 6px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #fffdf9;
+      }
+      .fetch-model-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 8px;
+        border-radius: 8px;
+        font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        font-weight: 400;
+        color: var(--text);
+        cursor: pointer;
+        word-break: break-all;
+      }
+      .fetch-model-item:hover {
+        background: rgba(143, 91, 51, 0.08);
+      }
+      .fetch-model-item input {
+        width: auto;
+        margin: 0;
+        flex: 0 0 auto;
+      }
+      .fetch-model-item.added {
+        color: var(--muted);
+        cursor: default;
+      }
       .status-row {
         display: grid;
         gap: 12px;
@@ -477,6 +604,8 @@ const SCRIPT = /* js */ String.raw`
       let pendingFocusTarget = null;
       let draggedMember = null;
       let draggedCard = null;
+      // Provider names whose grouped model card is expanded; groups are collapsed by default.
+      const expandedModelGroups = new Set();
 
       function nextId(prefix) {
         localIdCounter += 1;
@@ -719,6 +848,7 @@ const SCRIPT = /* js */ String.raw`
           if (options.min) control.min = options.min;
           if (options.step) control.step = options.step;
         }
+        if (options.invalid) control.classList.add("invalid");
         if (options.attributes) {
           for (const [key, value] of Object.entries(options.attributes)) {
             if (value !== undefined && value !== null) {
@@ -738,7 +868,7 @@ const SCRIPT = /* js */ String.raw`
         field.appendChild(control);
         if (options.helper) {
           const helper = document.createElement("div");
-          helper.className = "helper";
+          helper.className = "helper" + (options.helperError ? " error" : "");
           helper.textContent = options.helper;
           field.appendChild(helper);
         }
@@ -914,6 +1044,7 @@ const SCRIPT = /* js */ String.raw`
           providersContainer.appendChild(empty);
           return;
         }
+        const nameConflicts = getNameConflicts();
         formState.providers.forEach((provider) => {
           const card = document.createElement("section");
           card.className = "card" + (provider._expanded ? "" : " compact");
@@ -1070,6 +1201,24 @@ const SCRIPT = /* js */ String.raw`
             actions.appendChild(loginButton);
             actions.appendChild(usageButton);
           }
+          const providerModels = getGroupModels((provider.name || "").trim());
+          const conflictedCount = providerModels.filter((model) => nameConflicts.has(normalizeModelRef(model.name))).length;
+          const modelsLink = createActionButton(
+            (conflictedCount > 0 ? "⚠ " : "") + providerModels.length + " 个模型" + (conflictedCount > 0 ? "（" + conflictedCount + " 个冲突）" : ""),
+            "ghost models-link" + (conflictedCount > 0 ? " conflict" : ""),
+            () => locateModelGroup((provider.name || "").trim()),
+          );
+          modelsLink.title = providerModels.length > 0 ? "跳转到下方 Models 中该供应商的模型" : "该供应商下还没有模型，可点击“拉取模型”添加";
+          modelsLink.disabled = providerModels.length === 0;
+          actions.appendChild(modelsLink);
+          actions.appendChild(createActionButton("拉取模型", "secondary", () => {
+            if (!(provider.name || "").trim()) { window.alert("请先填写供应商名称。"); return; }
+            if (SUBSCRIPTION_PROVIDERS.includes(provider.provider)) {
+              const saved = (currentSnapshot.effectiveConfig?.providers || []).some((item) => item.name === provider.name && item.provider === provider.provider);
+              if (!saved || dirty) { window.alert("订阅供应商使用服务端已保存的登录凭证和代理拉取模型，请先保存配置并完成登录。"); return; }
+            } else if (!(provider.base_url || "").trim()) { window.alert("请先填写 base_url。"); return; }
+            openFetchModelsDialog(provider);
+          }));
           actions.appendChild(createActionButton("删除供应商", "danger", () => {
             formState.providers = formState.providers.filter((item) => item._id !== provider._id);
             markDirty(true);
@@ -1089,8 +1238,13 @@ const SCRIPT = /* js */ String.raw`
             provider.name = value;
             if (previousName) {
               formState.models.forEach((model) => {
-                if (model.connection_mode === "custom" && model.custom_provider === previousName) model.custom_provider = value;
+                if (model.connection_mode === "custom" && model.custom_provider === previousName) {
+                  const wasSuffixed = isSuffixedName(model, previousName);
+                  model.custom_provider = value;
+                  if (wasSuffixed && value) renameModelRef(model, getSuffixedName(model, value));
+                }
               });
+              if (expandedModelGroups.delete(previousName) && value) expandedModelGroups.add(value);
             }
             markDirty(true);
           } });
@@ -1400,6 +1554,416 @@ const SCRIPT = /* js */ String.raw`
         input.select();
       }
 
+      function isModelSaved(model) {
+        const name = (model.name || "").trim();
+        if (!name) return false;
+        return (currentSnapshot.effectiveConfig?.models || []).some((item) => item.name === name);
+      }
+
+      function getModelGroupKey(model) {
+        return model.connection_mode === "custom" && (model.custom_provider || "").trim() ? model.custom_provider : "";
+      }
+
+      function getGroupModels(providerName) {
+        return formState.models.filter((model) => getModelGroupKey(model) === providerName);
+      }
+
+      function getSuffixedName(model, providerName) {
+        return (model.model || "").trim() + "-" + providerName;
+      }
+
+      function isSuffixedName(model, providerName) {
+        return Boolean((model.model || "").trim()) && model.name === getSuffixedName(model, providerName);
+      }
+
+      // The suffix option is derived from the model names, so it needs no extra config field.
+      function isGroupSuffixed(providerName) {
+        const members = getGroupModels(providerName);
+        return members.length > 0 && members.every((model) => isSuffixedName(model, providerName));
+      }
+
+      function renameModelRef(model, nextName) {
+        const previousRef = normalizeModelRef(model.name);
+        model.name = nextName;
+        if (!previousRef || previousRef === nextName) return;
+        formState.fallbackGroups.forEach((group) => {
+          group.members.forEach((member) => {
+            if (normalizeModelRef(member.value) === previousRef) member.value = nextName;
+          });
+        });
+      }
+
+      function setGroupSuffix(providerName, enabled) {
+        getGroupModels(providerName).forEach((model) => {
+          const base = (model.model || "").trim();
+          if (!base) return;
+          renameModelRef(model, enabled ? getSuffixedName(model, providerName) : base);
+        });
+        markDirty(true);
+        renderAll({ preserveScroll: true, scrollToFocus: false });
+      }
+
+      function deleteGroupModels(providerName) {
+        const members = getGroupModels(providerName);
+        if (members.length === 0) return;
+        if (!window.confirm("确定删除供应商 " + providerName + " 下的全部 " + members.length + " 个模型配置吗？供应商本身会保留，fallback 分组中对应的成员也会被移除。")) return;
+        const removedIds = new Set(members.map((model) => model._id));
+        formState.models = formState.models.filter((model) => !removedIds.has(model._id));
+        const remainingNames = new Set(formState.models.map((model) => normalizeModelRef(model.name)));
+        const removedNames = new Set(members.map((model) => normalizeModelRef(model.name)).filter((name) => !remainingNames.has(name)));
+        formState.fallbackGroups.forEach((group) => {
+          group.members = group.members.filter((member) => !removedNames.has(normalizeModelRef(member.value)));
+        });
+        expandedModelGroups.delete(providerName);
+        markDirty(true);
+        renderAll({ preserveScroll: true, scrollToFocus: false });
+      }
+
+      function describeModelSource(model) {
+        const groupKey = getModelGroupKey(model);
+        const upstream = (model.model || "").trim() || "未填上游模型名";
+        return groupKey ? "供应商 " + groupKey + " / " + upstream : "独立模型 " + upstream;
+      }
+
+      // Public names must be unique across models and fallback groups. Returns name -> [{ label, model }] for clashing names.
+      function getNameConflicts() {
+        const byName = new Map();
+        const add = (name, source) => {
+          if (!name) return;
+          if (!byName.has(name)) byName.set(name, []);
+          byName.get(name).push(source);
+        };
+        formState.models.forEach((model) => add(normalizeModelRef(model.name), { label: describeModelSource(model), model }));
+        formState.fallbackGroups.forEach((group) => add(normalizeModelRef(group.name), { label: "fallback 分组", model: null }));
+        return new Map(Array.from(byName.entries()).filter(([, sources]) => sources.length > 1));
+      }
+
+      function describeOtherSources(sources, self) {
+        return sources.filter((source) => source.model !== self).map((source) => source.label).join("、");
+      }
+
+      function describeOtherSourcesForGroup(sources) {
+        const labels = sources.filter((source) => source.model).map((source) => source.label);
+        if (sources.filter((source) => !source.model).length > 1) labels.push("其他 fallback 分组");
+        return labels.join("、");
+      }
+
+      function scrollToElement(selector) {
+        requestAnimationFrame(() => {
+          const target = document.querySelector(selector);
+          if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
+
+      function locateModelGroup(providerName) {
+        if (!providerName) return;
+        expandedModelGroups.add(providerName);
+        renderAll({ preserveScroll: true, scrollToFocus: false });
+        scrollToElement("[data-model-group=\"" + providerName.replace(/["\\]/g, "\\$&") + "\"]");
+      }
+
+      function locateProvider(provider) {
+        provider._expanded = true;
+        pendingFocusTarget = "provider-name-" + provider._id;
+        renderAll();
+      }
+
+      function locateModel(model) {
+        const groupKey = getModelGroupKey(model);
+        if (groupKey) expandedModelGroups.add(groupKey);
+        model._expanded = true;
+        pendingFocusTarget = "model-name-" + model._id;
+        renderAll();
+      }
+
+      function buildConflictBanner(conflicts) {
+        const box = document.createElement("div");
+        box.className = "error-box conflict-banner";
+        const title = document.createElement("div");
+        title.textContent = "⚠ 发现 " + conflicts.size + " 个名称冲突，保存前需要调整（点击下方条目可定位到对应模型）：";
+        box.appendChild(title);
+        conflicts.forEach((sources, name) => {
+          const row = document.createElement("div");
+          row.className = "conflict-row";
+          const label = document.createElement("code");
+          label.textContent = name;
+          row.appendChild(label);
+          sources.forEach((source) => {
+            if (source.model) {
+              row.appendChild(createActionButton(source.label, "ghost", () => locateModel(source.model)));
+            } else {
+              const text = document.createElement("span");
+              text.className = "helper";
+              text.textContent = source.label;
+              row.appendChild(text);
+            }
+          });
+          box.appendChild(row);
+        });
+        return box;
+      }
+
+      function openFetchModelsDialog(provider) {
+        const providerName = (provider.name || "").trim();
+        const dialog = document.createElement("dialog");
+        dialog.className = "model-test-dialog";
+        const body = document.createElement("div");
+        body.className = "model-test-body";
+
+        const heading = document.createElement("h3");
+        heading.textContent = "拉取模型列表：" + providerName;
+        body.appendChild(heading);
+
+        const note = document.createElement("div");
+        note.className = "helper";
+        const isSubscription = SUBSCRIPTION_PROVIDERS.includes(provider.provider);
+        note.textContent = (isSubscription
+          ? (provider.provider === "claude-subscription"
+              ? "使用已保存的 Claude 登录凭证请求 api.anthropic.com/v1/models。"
+              : "使用已保存的 OpenAI 登录凭证请求 Codex 模型目录（chatgpt.com/backend-api/codex/models）。")
+          : "使用当前表单中填写的 base_url / api_key / proxy 请求上游 /models（无需先保存）。") +
+          "已添加过的模型不可重复选择；不同供应商的同名模型请在添加后自行调整名称，或为供应商勾选“加供应商名后缀”。";
+        body.appendChild(note);
+
+        const status = document.createElement("div");
+        status.className = "status";
+        body.appendChild(status);
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "fetch-model-toolbar";
+        const filter = document.createElement("input");
+        filter.type = "search";
+        filter.placeholder = "过滤模型 ID";
+        const selectAllButton = createActionButton("全选", "secondary", () => {
+          const targets = selectableVisibleIds();
+          const allSelected = targets.length > 0 && targets.every((id) => selected.has(id));
+          targets.forEach((id) => (allSelected ? selected.delete(id) : selected.add(id)));
+          renderList();
+        });
+        toolbar.append(filter, selectAllButton);
+        body.appendChild(toolbar);
+
+        const list = document.createElement("div");
+        list.className = "fetch-model-list";
+        body.appendChild(list);
+
+        const actions = document.createElement("div");
+        actions.className = "model-test-actions";
+        const closeButton = createActionButton("关闭", "ghost", () => dialog.close());
+        const reloadButton = createActionButton("重新拉取", "secondary", () => load());
+        const addButton = createActionButton("添加模型", "", () => {
+          const addedModels = getAddedModelIds();
+          const ids = allIds.filter((id) => selected.has(id) && !addedModels.has(id));
+          if (ids.length === 0) return;
+          const suffixed = isGroupSuffixed(providerName);
+          ids.forEach((id) => {
+            formState.models.push({
+              _id: nextId("model"),
+              _expanded: false,
+              name: suffixed ? id + "-" + providerName : id,
+              provider: provider.provider === "claude-subscription" ? "anthropic" : provider.provider === "openai-subscription" ? "openai-responses" : provider.provider,
+              connection_mode: "custom",
+              custom_provider: providerName,
+              base_url: "",
+              api_key: "",
+              model: id,
+              proxy: "",
+              body_expression: "",
+              response_expression: "",
+              extras: {},
+              _advancedExpanded: false,
+              _advancedJsonText: "{}",
+              _extrasError: "",
+            });
+          });
+          expandedModelGroups.add(providerName);
+          const duplicates = getNameConflicts();
+          const conflicts = formState.models
+            .filter((model) => getModelGroupKey(model) === providerName && duplicates.has(normalizeModelRef(model.name)))
+            .map((model) => normalizeModelRef(model.name));
+          markDirty(true);
+          dialog.close();
+          renderAll({ preserveScroll: true, scrollToFocus: false });
+          setStatus(
+            conflicts.length > 0 ? "warn" : "success",
+            "已添加 " + ids.length + " 个模型，保存后生效。" +
+              (conflicts.length > 0 ? "其中 " + conflicts.length + " 个与已有模型重名（" + conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? " …" : "") + "），保存前请调整名称。" : ""),
+          );
+        });
+        actions.append(closeButton, reloadButton, addButton);
+        body.appendChild(actions);
+
+        let allIds = [];
+        const selected = new Set();
+
+        function getAddedModelIds() {
+          return new Set(getGroupModels(providerName).map((model) => (model.model || "").trim()));
+        }
+
+        function visibleIds() {
+          const query = filter.value.trim().toLowerCase();
+          return allIds.filter((id) => !query || id.toLowerCase().includes(query));
+        }
+
+        function selectableVisibleIds() {
+          const addedModels = getAddedModelIds();
+          return visibleIds().filter((id) => !addedModels.has(id));
+        }
+
+        function renderList() {
+          const addedModels = getAddedModelIds();
+          list.textContent = "";
+          const ids = visibleIds();
+          if (ids.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "helper";
+            empty.textContent = allIds.length === 0 ? "暂无模型。" : "没有匹配的模型。";
+            list.appendChild(empty);
+          }
+          ids.forEach((id) => {
+            const isAdded = addedModels.has(id);
+            const row = document.createElement("label");
+            row.className = "fetch-model-item" + (isAdded ? " added" : "");
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = isAdded || selected.has(id);
+            checkbox.disabled = isAdded;
+            checkbox.addEventListener("change", () => {
+              if (checkbox.checked) selected.add(id); else selected.delete(id);
+              renderList();
+            });
+            const text = document.createElement("span");
+            text.textContent = id + (isAdded ? "（已添加）" : "");
+            row.append(checkbox, text);
+            list.appendChild(row);
+          });
+          const targets = selectableVisibleIds();
+          const allSelected = targets.length > 0 && targets.every((id) => selected.has(id));
+          selectAllButton.textContent = allSelected ? "取消全选" : "全选";
+          selectAllButton.disabled = targets.length === 0;
+          const count = allIds.filter((id) => selected.has(id) && !addedModels.has(id)).length;
+          addButton.textContent = "添加模型（" + count + "）";
+          addButton.disabled = count === 0;
+        }
+
+        async function load() {
+          reloadButton.disabled = true;
+          status.className = "status warn";
+          status.textContent = "拉取中...";
+          try {
+            const response = isSubscription
+              ? await fetch("/admin/providers/" + encodeURIComponent(providerName) + "/models", { cache: "no-store" })
+              : await fetch("/admin/upstream-models", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ provider: provider.provider, base_url: provider.base_url, api_key: provider.api_key, proxy: provider.proxy || "" }),
+                });
+            const payload = readJsonResponse(await response.text());
+            if (!response.ok || !payload.ok) throw new Error(typeof payload.error === "string" ? payload.error : "拉取模型列表失败");
+            allIds = Array.isArray(payload.models) ? payload.models : [];
+            selected.clear();
+            status.className = "status success";
+            status.textContent = "共获取 " + allIds.length + " 个模型。";
+          } catch (error) {
+            allIds = [];
+            status.className = "status error";
+            status.textContent = error instanceof Error ? error.message : String(error);
+          } finally {
+            reloadButton.disabled = false;
+            renderList();
+          }
+        }
+
+        filter.addEventListener("input", renderList);
+        renderList();
+        dialog.appendChild(body);
+        document.body.appendChild(dialog);
+        dialog.addEventListener("close", () => dialog.remove(), { once: true });
+        dialog.showModal();
+        filter.focus();
+        load();
+      }
+
+      function buildModelGroupCard(providerName, duplicateNames) {
+        const members = getGroupModels(providerName);
+        const expanded = expandedModelGroups.has(providerName);
+        const provider = formState.providers.find((item) => item.name === providerName);
+        const card = document.createElement("section");
+        card.className = "card group-card" + (expanded ? "" : " compact");
+        card.setAttribute("data-model-group", providerName);
+
+        const head = document.createElement("div");
+        head.className = "card-head";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "card-toggle";
+        toggle.addEventListener("click", () => {
+          if (expanded) expandedModelGroups.delete(providerName); else expandedModelGroups.add(providerName);
+          renderAll({ preserveScroll: true, scrollToFocus: false });
+        });
+        const toggleTop = document.createElement("div");
+        toggleTop.className = "card-toggle-top";
+        const chevron = document.createElement("span");
+        chevron.className = "card-chevron";
+        chevron.textContent = expanded ? "▾" : "▸";
+        const title = document.createElement("div");
+        title.className = "card-title";
+        const h3 = document.createElement("h3");
+        h3.textContent = providerName;
+        title.appendChild(h3);
+        const kindBadge = document.createElement("div");
+        kindBadge.className = "pill kind";
+        kindBadge.textContent = "供应商";
+        title.appendChild(kindBadge);
+        const countBadge = document.createElement("div");
+        countBadge.className = "pill neutral";
+        countBadge.textContent = members.length + " 个模型";
+        title.appendChild(countBadge);
+        const conflictedMembers = members.filter((model) => duplicateNames.has(normalizeModelRef(model.name)));
+        if (conflictedMembers.length > 0) {
+          card.classList.add("conflict");
+          const badge = document.createElement("div");
+          badge.className = "pill conflict";
+          badge.textContent = "⚠ " + conflictedMembers.length + " 个模型名冲突";
+          badge.title = "冲突的模型：" + conflictedMembers.map((model) => normalizeModelRef(model.name)).join("、") + "。展开后可看到具体标记。";
+          title.appendChild(badge);
+        }
+        toggleTop.append(chevron, title);
+        toggle.appendChild(toggleTop);
+        const summary = document.createElement("div");
+        summary.className = "card-summary";
+        summary.textContent = provider
+          ? (SUBSCRIPTION_PROVIDERS.includes(provider.provider) ? provider.provider : (provider.provider || "未选协议") + " · " + (provider.base_url || "未填 base_url"))
+          : "未找到该供应商，请检查供应商配置";
+        toggle.appendChild(summary);
+        head.appendChild(toggle);
+
+        const actions = document.createElement("div");
+        actions.className = "card-actions";
+        const suffixLabel = document.createElement("label");
+        suffixLabel.className = "suffix-toggle";
+        suffixLabel.title = "勾选后，该供应商下所有模型的名称变为“模型ID-供应商名”，取消勾选则恢复为模型ID。";
+        const suffixCheckbox = document.createElement("input");
+        suffixCheckbox.type = "checkbox";
+        suffixCheckbox.checked = isGroupSuffixed(providerName);
+        suffixCheckbox.addEventListener("change", () => setGroupSuffix(providerName, suffixCheckbox.checked));
+        suffixLabel.append(suffixCheckbox, document.createTextNode("加供应商名后缀"));
+        if (provider) actions.appendChild(createActionButton("编辑供应商", "ghost", () => locateProvider(provider)));
+        actions.appendChild(suffixLabel);
+        actions.appendChild(createActionButton("删除全部模型", "danger", () => deleteGroupModels(providerName)));
+        head.appendChild(actions);
+        card.appendChild(head);
+
+        // Members are only rendered while expanded so that very large groups stay cheap.
+        if (expanded) {
+          const body = document.createElement("div");
+          body.className = "group-body";
+          members.forEach((model) => body.appendChild(buildModelCard(model, formState.models.indexOf(model), duplicateNames)));
+          card.appendChild(body);
+        }
+        return card;
+      }
+
       function renderModels() {
         modelsContainer.textContent = "";
         if (formState.models.length === 0) {
@@ -1409,10 +1973,35 @@ const SCRIPT = /* js */ String.raw`
           modelsContainer.appendChild(empty);
           return;
         }
+        const duplicateNames = getNameConflicts();
+        if (duplicateNames.size > 0) modelsContainer.appendChild(buildConflictBanner(duplicateNames));
+        // Provider groups come first (ordered by their first member), standalone models follow.
+        const groupKeys = [];
+        formState.models.forEach((model) => {
+          const groupKey = getModelGroupKey(model);
+          if (groupKey && !groupKeys.includes(groupKey)) groupKeys.push(groupKey);
+        });
+        const standalone = formState.models
+          .map((model, index) => ({ model, index }))
+          .filter(({ model }) => !getModelGroupKey(model));
+        const addHeading = (text) => {
+          const heading = document.createElement("div");
+          heading.className = "subhead";
+          heading.textContent = text;
+          modelsContainer.appendChild(heading);
+        };
+        const showHeadings = groupKeys.length > 0 && standalone.length > 0;
+        if (showHeadings) addHeading("供应商模型（" + groupKeys.length + "）");
+        groupKeys.forEach((groupKey) => modelsContainer.appendChild(buildModelGroupCard(groupKey, duplicateNames)));
+        if (showHeadings) addHeading("独立配置的模型（" + standalone.length + "）");
+        standalone.forEach(({ model, index }) => modelsContainer.appendChild(buildModelCard(model, index, duplicateNames)));
+      }
 
-        formState.models.forEach((model, index) => {
+      function buildModelCard(model, index, duplicateNames) {
+          const nameSources = duplicateNames.get(normalizeModelRef(model.name));
+          const nameConflict = nameSources ? "与 " + describeOtherSources(nameSources, model) + " 重名，请修改名称" : "";
           const card = document.createElement("section");
-          card.className = "card" + (model._expanded ? "" : " compact");
+          card.className = "card" + (model._expanded ? "" : " compact") + (nameConflict ? " conflict" : "");
 
           const head = document.createElement("div");
           head.className = "card-head";
@@ -1436,6 +2025,13 @@ const SCRIPT = /* js */ String.raw`
           const h3 = document.createElement("h3");
           h3.textContent = model.name?.trim() || "未命名模型 " + (index + 1);
           title.appendChild(h3);
+          if (nameConflict) {
+            const badge = document.createElement("div");
+            badge.className = "pill conflict";
+            badge.textContent = "⚠ 名称冲突";
+            badge.title = nameConflict;
+            title.appendChild(badge);
+          }
           if (model.extras && Object.keys(model.extras).length > 0) {
             const badge = document.createElement("div");
             badge.className = "pill neutral";
@@ -1462,7 +2058,14 @@ const SCRIPT = /* js */ String.raw`
           const actions = document.createElement("div");
           actions.className = "card-actions";
           if (getEffectiveModelProvider(model) !== "openai-image") {
-            actions.appendChild(createActionButton("测试", "secondary", () => openModelTestDialog(model)));
+            const testButton = createActionButton("测试", "secondary", () => openModelTestDialog(model));
+            if (!isModelSaved(model)) {
+              // Testing uses the server-side saved config, so an unsaved model would always fail.
+              testButton.disabled = true;
+              testButton.setAttribute("data-blocked", "1");
+              testButton.title = "模型尚未保存，请先点击“保存并应用”后再测试";
+            }
+            actions.appendChild(testButton);
           }
           actions.appendChild(
             createActionButton("复刻", "secondary", () => {
@@ -1499,6 +2102,9 @@ const SCRIPT = /* js */ String.raw`
           grid.className = "field-grid two";
           bindField(grid, "name", {
             value: model.name,
+            invalid: Boolean(nameConflict),
+            helper: nameConflict ? "⚠ " + nameConflict : "",
+            helperError: true,
             attributes: { "data-focus-id": "model-name-" + model._id },
             onInput(value) {
               const previousName = model.name;
@@ -1524,6 +2130,7 @@ const SCRIPT = /* js */ String.raw`
               if (value === "custom_provider") {
                 model.connection_mode = "custom";
                 model.custom_provider = model.custom_provider || formState.providers[0]?.name || "";
+                if (model.custom_provider) expandedModelGroups.add(model.custom_provider);
               } else {
                 model.connection_mode = "direct";
                 model.provider = value;
@@ -1541,6 +2148,7 @@ const SCRIPT = /* js */ String.raw`
               helper: formState.providers.length > 0 ? "" : "请先添加供应商。",
               onInput(value) {
                 model.custom_provider = value;
+                if (value) expandedModelGroups.add(value);
                 markDirty(true);
                 renderAll({ preserveScroll: true, scrollToFocus: false });
               },
@@ -1598,8 +2206,7 @@ const SCRIPT = /* js */ String.raw`
 
           card.appendChild(body);
 
-          modelsContainer.appendChild(card);
-        });
+          return card;
       }
 
       function renderFallbackGroups() {
@@ -1613,6 +2220,7 @@ const SCRIPT = /* js */ String.raw`
         }
 
         const options = getModelNameOptions();
+        const nameConflicts = getNameConflicts();
 
         formState.fallbackGroups.forEach((group, index) => {
           const card = document.createElement("section");
@@ -1665,9 +2273,13 @@ const SCRIPT = /* js */ String.raw`
 
           const grid = document.createElement("div");
           grid.className = "field-grid";
+          const groupNameSources = nameConflicts.get(normalizeModelRef(group.name));
           bindField(grid, "group name", {
             spanClass: "span-3",
             value: group.name,
+            invalid: Boolean(groupNameSources),
+            helper: groupNameSources ? "⚠ 与 " + describeOtherSourcesForGroup(groupNameSources) + " 重名，请修改分组名" : "",
+            helperError: true,
             attributes: { "data-focus-id": "fallback-name-" + group._id },
             placeholder: "例如 gpt-5.4",
             onInput(value) {
