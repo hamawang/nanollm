@@ -20,14 +20,14 @@ import {
   setRecordedAttemptResponseMeta,
 } from "./record.js";
 import { runInNewContext } from "node:vm";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { extractErrorCauses } from "./error-details.js";
 import { getClientIp, getClientRequestHeaders } from "./request-context.js";
 import { getCachedSubscriptionCredential, ensureSubscriptionCredential, SUBSCRIPTION_URL } from "./openai-subscription.js";
 import { CLAUDE_CODE_DEFAULT_HEADERS, CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT } from "./subscription-client-compat.js";
 import { addClaudeBillingBlock } from "./claude-billing.js";
-import { addClaudeSubscriptionUserId, hasClaudeMetadataUserId, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "./claude-subscription-body.js";
+import { applyClaudeSubscriptionSessionIdentity, hasClaudeMetadataUserId, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "./claude-subscription-body.js";
 import {
   CLAUDE_CODE_BETA,
   CLAUDE_MESSAGES_URL,
@@ -530,11 +530,6 @@ export function applyClaudeSubscriptionHeaders(headers: Record<string, string>, 
   }
   if (stream && !getHeader(headers, "x-stainless-helper-method")) setHeader(headers, "x-stainless-helper-method", "stream");
   if (!getHeader(headers, "x-client-request-id")) setHeader(headers, "x-client-request-id", randomUUID());
-  if (!getHeader(headers, "x-claude-code-session-id")) {
-    const ip = getClientIp() || "unknown";
-    const day = new Date().toISOString().slice(0, 10);
-    setHeader(headers, "x-claude-code-session-id", `${day}-${createHash("sha256").update(ip).digest("hex").slice(0, 24)}`);
-  }
 }
 
 function applyCodexSubscriptionIdentityHeaders(headers: Record<string, string>, incoming = getClientRequestHeaders()): void {
@@ -595,17 +590,17 @@ async function upstreamFetch(
   if (config.claude_subscription_provider) await ensureClaudeSubscriptionCredential(config.claude_subscription_provider);
   // The Codex backend only accepts streaming, unstored requests; non-stream callers aggregate the SSE.
   let requestBody = config.subscription_provider ? sanitizeCodexSubscriptionBody(body) : body;
-  if (config.claude_subscription_provider && isPlainObject(requestBody) && !hasClaudeMetadataUserId(requestBody)) {
-    requestBody = addClaudeSubscriptionUserId(requestBody, {
+  const upstreamStream = config.subscription_provider ? true : stream;
+  const headers = getForwardHeaders(config, requestBody, options);
+  if (config.claude_subscription_provider && isPlainObject(requestBody)) {
+    requestBody = applyClaudeSubscriptionSessionIdentity(requestBody, headers, {
       provider: config.claude_subscription_provider,
-      deviceId: getOrCreateClaudeSubscriptionDeviceId(config.claude_subscription_provider),
+      deviceId: hasClaudeMetadataUserId(requestBody) ? "" : getOrCreateClaudeSubscriptionDeviceId(config.claude_subscription_provider),
       clientHeaders: getClientRequestHeaders(),
       clientIp: getClientIp(),
       promptCacheKey,
     });
   }
-  const upstreamStream = config.subscription_provider ? true : stream;
-  const headers = getForwardHeaders(config, requestBody, options);
   const upstreamBody = config.claude_subscription_provider
     ? sanitizeClaudeSubscriptionBody(addClaudeBillingBlock(requestBody, getHeader(headers, "user-agent")))
     : requestBody;

@@ -23,7 +23,7 @@ import {
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
 import { denormalizeToAnthropicRequest, normalizeOpenAIChatRequest, normalizeOpenAIResponsesRequest } from "../src/converters/requests.js";
-import { addClaudeSubscriptionUserId, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "../src/claude-subscription-body.js";
+import { addClaudeSubscriptionUserId, applyClaudeSubscriptionSessionIdentity, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "../src/claude-subscription-body.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
@@ -4110,6 +4110,30 @@ run("claude subscription session identity prioritizes original headers over prom
     session({ ...base, clientHeaders: new Headers({ "x-claude-code-session-id": "cc" }) }));
   assert.notEqual(session({ ...base, promptCacheKey: "key1" }), session({ ...base, promptCacheKey: "key2" }));
   assert.notEqual(session({ ...base, promptCacheKey: "key1" }), session({ ...base, provider: "other", promptCacheKey: "key1" }));
+});
+
+run("claude subscription synchronizes final session header with structured metadata", () => {
+  const base = { provider: "claude", deviceId: "a".repeat(64), promptCacheKey: "key" };
+  const existingIdentity = { device_id: "existing-device", account_uuid: "existing-account", session_id: "existing-session", extra: "kept" };
+  const body = { messages: [{ role: "user", content: "hello" }], metadata: { user_id: JSON.stringify(existingIdentity) } };
+  const headers: Record<string, string> = {};
+  assert.equal(applyClaudeSubscriptionSessionIdentity(body, headers, base), body);
+  assert.equal(headers["x-claude-code-session-id"], existingIdentity.session_id);
+  const overridden: Record<string, string> = { "X-Claude-Code-Session-Id": "configured-session" };
+  const updated = applyClaudeSubscriptionSessionIdentity(body, overridden, { ...base, clientHeaders: new Headers({ "x-claude-code-session-id": "client-session" }) }) as any;
+  assert.deepEqual(JSON.parse(updated.metadata.user_id), { ...existingIdentity, session_id: "configured-session" });
+  assert.deepEqual(overridden, { "x-claude-code-session-id": "configured-session" });
+  assert.equal(JSON.parse(body.metadata.user_id).session_id, "existing-session");
+  const generated: Record<string, string> = {};
+  const generatedBody = applyClaudeSubscriptionSessionIdentity({ messages: body.messages }, generated, base) as any;
+  assert.equal(JSON.parse(generatedBody.metadata.user_id).session_id, generated["x-claude-code-session-id"]);
+  const other: Record<string, string> = {};
+  applyClaudeSubscriptionSessionIdentity({ messages: body.messages }, other, { ...base, promptCacheKey: "other-key" });
+  assert.notEqual(generated["x-claude-code-session-id"], other["x-claude-code-session-id"]);
+  const legacy = { metadata: { user_id: `user_${"a".repeat(64)}_account__session_11111111-1111-4111-8111-111111111111` } };
+  const legacyHeaders: Record<string, string> = { "x-claude-code-session-id": "session-$&" };
+  const legacyBody = applyClaudeSubscriptionSessionIdentity(legacy, legacyHeaders, base) as any;
+  assert.equal(legacyBody.metadata.user_id, `user_${"a".repeat(64)}_account__session_session-$&`);
 });
 
 run("claude subscription session fallback stays stable as conversation grows", () => {

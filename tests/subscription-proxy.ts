@@ -10,6 +10,7 @@ import { oauthPost, resolveOAuthTransportPath } from "../src/oauth-transport.js"
 import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, ensureClaudeSubscriptionCredential, getCachedClaudeSubscriptionCredential, getOrCreateClaudeSubscriptionDeviceId, parseClaudeCallback, startClaudeLogin } from "../src/claude-subscription.js";
 import { parseConfigText } from "../src/config.js";
 import { applyClaudeSubscriptionHeaders, getUpstreamURL } from "../src/proxy.js";
+import { applyClaudeSubscriptionSessionIdentity } from "../src/claude-subscription-body.js";
 import { runWithRequestId, setClientIp, setClientRequestHeaders } from "../src/request-context.js";
 import { bootstrapSubscriptionProviders, configureSubscriptionStorage, startDeviceLogin, pollDeviceLogin, ensureSubscriptionCredential, getCachedSubscriptionCredential } from "../src/openai-subscription.js";
 
@@ -180,21 +181,31 @@ test("claude subscription headers merge betas and default Claude Code identity",
   assert.equal(fromClaudeCode["User-Agent"], "claude-cli/9.9.9 (external, cli)");
 });
 
-test("claude subscription generates a daily stable session id from caller IP only when absent", () => {
+test("claude subscription uses one stable session ID in headers and metadata", () => {
   const clientHeaders = new Headers({ "x-forwarded-for": "203.0.113.4" });
   runWithRequestId("claude-session-default", () => {
     setClientRequestHeaders(clientHeaders);
     setClientIp("203.0.113.4");
     const first: Record<string, string> = {};
     applyClaudeSubscriptionHeaders(first);
+    const body = { messages: [{ role: "user", content: "hello" }] };
+    const options = { provider: "claude", deviceId: "a".repeat(64), clientHeaders, clientIp: "203.0.113.4" };
+    const firstBody = applyClaudeSubscriptionSessionIdentity(body, first, options) as any;
     const second: Record<string, string> = {};
     applyClaudeSubscriptionHeaders(second);
+    applyClaudeSubscriptionSessionIdentity({ messages: [...body.messages, { role: "assistant", content: "answer" }] }, second, options);
     assert.equal(first["x-claude-code-session-id"], second["x-claude-code-session-id"]);
-    assert.match(first["x-claude-code-session-id"], /^\d{4}-\d{2}-\d{2}-[a-f0-9]{24}$/);
+    assert.match(first["x-claude-code-session-id"]!, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+    assert.equal(JSON.parse(firstBody.metadata.user_id).session_id, first["x-claude-code-session-id"]);
 
     const explicit: Record<string, string> = { "x-claude-code-session-id": "caller-session" };
     applyClaudeSubscriptionHeaders(explicit);
+    const explicitBody = applyClaudeSubscriptionSessionIdentity(body, explicit, options) as any;
     assert.equal(explicit["x-claude-code-session-id"], "caller-session");
+    assert.equal(JSON.parse(explicitBody.metadata.user_id).session_id, "caller-session");
+    const other: Record<string, string> = {};
+    applyClaudeSubscriptionSessionIdentity({ messages: [{ role: "user", content: "different chat" }] }, other, options);
+    assert.notEqual(first["x-claude-code-session-id"], other["x-claude-code-session-id"]);
   });
 });
 

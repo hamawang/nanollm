@@ -6,18 +6,35 @@ export function hasClaudeMetadataUserId(body: unknown): boolean {
   return isRecord(body) && isRecord(body.metadata) && typeof body.metadata.user_id === "string" && body.metadata.user_id.trim().length > 0;
 }
 
-/** Session hints are read from the original client request, before default headers. */
-export function addClaudeSubscriptionUserId(body: unknown, options: {
+export interface ClaudeSubscriptionIdentityOptions {
   provider: string;
   deviceId: string;
   clientHeaders?: Headers;
   clientIp?: string;
   promptCacheKey?: string;
-}): unknown {
-  if (!isRecord(body) || hasClaudeMetadataUserId(body)) return body;
+  sessionId?: string;
+}
+
+function metadataIdentity(body: unknown): Record<string, unknown> | undefined {
+  if (!hasClaudeMetadataUserId(body) || !isRecord(body) || !isRecord(body.metadata)) return undefined;
+  try {
+    const identity: unknown = JSON.parse(body.metadata.user_id as string);
+    return isRecord(identity) ? identity : undefined;
+  } catch { return undefined; }
+}
+
+export function resolveClaudeSubscriptionSessionId(body: unknown, options: ClaudeSubscriptionIdentityOptions): string {
+  const explicit = options.sessionId?.trim() || options.clientHeaders?.get("x-claude-code-session-id")?.trim();
+  if (explicit) return explicit;
+  const identity = metadataIdentity(body);
+  if (typeof identity?.session_id === "string" && identity.session_id.trim()) return identity.session_id.trim();
+  if (isRecord(body) && isRecord(body.metadata) && typeof body.metadata.user_id === "string") {
+    const legacy = /^user_[a-f0-9]{64}_account_[a-f0-9-]*_session_([a-f0-9-]{36})$/i.exec(body.metadata.user_id);
+    if (legacy) return legacy[1]!;
+  }
   let source = "fallback";
   let value = "";
-  for (const name of ["x-claude-code-session-id", "session_id", "thread_id", "conversation_id"]) {
+  for (const name of ["session_id", "thread_id", "conversation_id"]) {
     const hint = options.clientHeaders?.get(name)?.trim();
     if (hint) { source = name; value = hint; break; }
   }
@@ -26,7 +43,7 @@ export function addClaudeSubscriptionUserId(body: unknown, options: {
     value = options.promptCacheKey.trim();
   }
   if (!value) {
-    const firstUser = Array.isArray(body.messages)
+    const firstUser = isRecord(body) && Array.isArray(body.messages)
       ? body.messages.find((message) => isRecord(message) && message.role === "user") : undefined;
     const content = isRecord(firstUser) ? firstUser.content : undefined;
     const text = typeof content === "string" ? content : Array.isArray(content)
@@ -37,11 +54,38 @@ export function addClaudeSubscriptionUserId(body: unknown, options: {
   hash[6] = (hash[6]! & 0x0f) | 0x40;
   hash[8] = (hash[8]! & 0x3f) | 0x80;
   const hex = hash.subarray(0, 16).toString("hex");
-  const sessionId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function addClaudeSubscriptionUserId(body: unknown, options: ClaudeSubscriptionIdentityOptions): unknown {
+  if (!isRecord(body)) return body;
+  const sessionId = resolveClaudeSubscriptionSessionId(body, options);
+  if (hasClaudeMetadataUserId(body)) {
+    const identity = metadataIdentity(body);
+    if (identity) {
+      if (identity.session_id === sessionId) return body;
+      return { ...body, metadata: { ...(body.metadata as Record<string, unknown>), user_id: JSON.stringify({ ...identity, session_id: sessionId }) } };
+    }
+    const metadata = body.metadata as Record<string, unknown>;
+    const raw = metadata.user_id as string;
+    const legacy = /^user_[a-f0-9]{64}_account_[a-f0-9-]*_session_[a-f0-9-]{36}$/i.test(raw);
+    if (legacy) return { ...body, metadata: { ...metadata, user_id: raw.replace(/_session_.*$/, () => `_session_${sessionId}`) } };
+    return body;
+  }
   return { ...body, metadata: {
     ...(isRecord(body.metadata) ? body.metadata : {}),
     user_id: JSON.stringify({ device_id: options.deviceId, account_uuid: "", session_id: sessionId }),
   } };
+}
+
+/** Resolve the final header first, then copy exactly that value into metadata. */
+export function applyClaudeSubscriptionSessionIdentity(body: unknown, headers: Record<string, string>, options: ClaudeSubscriptionIdentityOptions): unknown {
+  const sessionId = resolveClaudeSubscriptionSessionId(body, { ...options, sessionId: new Headers(headers).get("x-claude-code-session-id") ?? undefined });
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === "x-claude-code-session-id") delete headers[name];
+  }
+  headers["x-claude-code-session-id"] = sessionId;
+  return addClaudeSubscriptionUserId(body, { ...options, sessionId });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
