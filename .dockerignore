@@ -10,5 +10,6 @@ native-bin
 native/**/target
 node_modules
 openai-subscription
+claude-subscription
 config.yaml
 *.log

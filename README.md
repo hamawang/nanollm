@@ -32,6 +32,10 @@ providers:
   - name: codex-subscription
     provider: openai-subscription
 
+  # Claude Pro/Max 订阅：不配置 base_url 和 api_key，在 /admin 登录
+  - name: claude-subscription
+    provider: claude-subscription
+
 models:
   - name: gpt-5.4-a
     # responses规范
@@ -212,6 +216,31 @@ models:
 凭据以明文 JSON 保存到 `<config.yaml 所在目录>/openai-subscription/<uuid>.json`，内容包含 access token、refresh token、过期时间、账户 ID 和供应商名称等信息。nanollm 会在 token 到期前自动刷新并更新该文件，因此该目录需要限制访问并持久化。
 
 Railway 使用 `/data/config.yaml` 时，凭据位于 `/data/openai-subscription/<uuid>.json`。将 volume 挂载到 `/data` 即可同时保存配置和登录状态，服务端可以直接通过管理页完成 Device Code 登录。
+
+Codex 订阅请求会透传客户端同时提供的 `originator` 与 `User-Agent`；缺少其中任一项时使用一组配对的 Codex CLI 默认值。默认版本、`originator` 和 UA 在 `src/subscription-client-compat.ts` 中维护，升级兼容版本时修改该文件。
+
+#### Claude subscription
+
+Claude Pro / Max 订阅同样只能在顶层 `providers` 中配置，模型通过 `custom_provider` 引用，按 Anthropic Messages 协议（`/v1/messages`）调用上游：
+
+```yaml
+providers:
+  - name: my-claude-subscription
+    provider: claude-subscription
+
+models:
+  - name: claude-sonnet-subscription
+    custom_provider: my-claude-subscription
+    model: claude-sonnet-4-5
+```
+
+`claude-subscription` 不接受 `base_url` 或 `api_key`。Claude 没有 Device Code 登录，流程是：保存配置后在 `/admin` 展开该供应商并点击“登录”，在新打开的 Claude 授权页完成授权；浏览器随后跳转到 `https://platform.claude.com/oauth/code/callback?code=...&state=...`，把地址栏中的完整 URL（或该页面显示的 `code#state`）粘贴回管理页弹窗并点击“完成登录”。登录会话 10 分钟内有效。登录成功后同样显示“已登录”、“重新登录”和“查询用量”（5 小时 / 7 天窗口利用率）。
+
+Claude Code 的兼容版本与默认 User-Agent，以及 Codex CLI 的默认身份常量，集中保存在 `src/subscription-client-compat.ts`；升级对应 CLI 兼容版本时请同步更新这里的版本及 Claude beta 标识。Claude 请求若客户端未传 `x-claude-code-session-id`，网关会按 UTC 日期与请求中的 `x-forwarded-for` 首个地址（或 `x-real-ip`、`cf-connecting-ip`）生成当日稳定值，IP 部分以 SHA-256 摘要形式写入。
+
+凭据以明文 JSON 保存到 `<config.yaml 所在目录>/claude-subscription/<uuid>.json`（access token、refresh token、过期时间、scopes、订阅类型、账户邮箱等），在到期前 5 分钟自动刷新。请求上游时使用 `Authorization: Bearer`，并参考 Claude Code 的请求头：`anthropic-beta` 总是包含 `oauth-2025-04-20` 与 `claude-code-20250219`（与客户端传入的 beta 合并）；缺失时补 `Accept`、`User-Agent`、`x-app`、`x-stainless-*` 和 `anthropic-dangerous-direct-browser-access` 默认值，流式请求补 `x-stainless-helper-method: stream`，每个缺少 `x-client-request-id` 的请求生成新 UUID。客户端传入的这些头以及模型配置中的 `headers` 可覆盖默认值。
+
+Claude 订阅请求若没有现成的 billing system block，会在最终请求体的 `system` 数组前插入 `x-anthropic-billing-header: cc_version=<CLI版本>.<指纹>; cc_entrypoint=cli;` 文本。指纹按首条用户消息计算，CLI 版本取最终出站 `claude-cli/*` UA 的版本或上述默认版本；不会添加 `cch`。
 
 Railway 从 Git 仓库部署时会自动使用仓库根目录的 `Dockerfile`。Docker 构建阶段会编译 Linux x64 Rust helper，最终运行镜像只包含 Node.js、nanollm 和编译好的 helper，不需要在运行容器中安装 Rust，也不依赖 GitHub Release 下载。保持启动命令为空即可使用 Dockerfile 中的默认命令；volume 挂载目录设置为 `/data`。
 

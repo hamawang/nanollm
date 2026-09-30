@@ -22,15 +22,21 @@ import {
   responsesResponseToAnthropicMessage,
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
+import { normalizeOpenAIResponsesRequest } from "../src/converters/requests.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { buildAdminConfigForm, buildYamlTextFromAdminForm } from "../src/admin-config-form.js";
 import { buildModelTestRequest, extractModelTestReply } from "../src/model-test.js";
+import { buildSubscriptionModelsRequest } from "../src/openai-subscription.js";
+import { fetchLatestCodexVersion, parseCodexReleaseVersion } from "../src/codex-version.js";
+import { buildClaudeModelsHeaders } from "../src/claude-subscription.js";
+import { CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT, CODEX_CLI_VERSION } from "../src/subscription-client-compat.js";
+import { extractUpstreamModelIds, fetchUpstreamModels } from "../src/upstream-models.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
-import { forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
+import { applyClaudeSubscriptionHeaders, applyCodexSubscriptionHeaders, forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "../src/response-cache.js";
 import { buildNonStreamResponse, RESPONSE_COMPRESSION_THRESHOLD_BYTES } from "../src/response-compression.js";
 import { renderRecordPage } from "../src/record-page.js";
@@ -56,7 +62,7 @@ import {
   useMemoryRecordStore,
   useSqliteRecordStore,
 } from "../src/record.js";
-import { runWithRequestId } from "../src/request-context.js";
+import { runWithRequestId, setClientRequestHeaders } from "../src/request-context.js";
 import { SqliteStatusStore, StatusStore, getHealthTone } from "../src/status.js";
 import { shouldIgnoreStreamReadError } from "../src/stream-errors.js";
 import { extractErrorCauses, formatErrorWithCauses } from "../src/error-details.js";
@@ -3924,6 +3930,99 @@ await runAsync("openai responses passthrough drops persisted item ids when store
   });
 });
 
+await runAsync("upstream requests forward only provider-specific client headers", async () => {
+  const clientHeaders = new Headers({
+    Authorization: "Bearer client-secret",
+    Cookie: "sid=1",
+    "X-Forwarded-For": "1.2.3.4",
+    session_id: "sess-1",
+    thread_id: "thread-1",
+    conversation_id: "conv-1",
+    version: "0.99.0",
+    "X-Codex-Turn-State": "turn-1",
+    "X-Codex-Routing-Hint": "model=spoofed",
+    "X-OpenAI-Subagent": "review",
+    "Anthropic-Beta": "prompt-caching-2024-07-31",
+    "Anthropic-Version": "2099-01-01",
+  });
+  const received: http.IncomingHttpHeaders[] = [];
+  await withHTTPServer(async (req, res) => {
+    received.push(req.headers);
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url?.endsWith("/messages")) {
+        res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: "m", content: [], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } }));
+      } else if (req.url?.endsWith("/chat/completions")) {
+        res.end(JSON.stringify({ id: "chatcmpl_1", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+      } else {
+        res.end(JSON.stringify({ id: "resp_1", object: "response", output: [], usage: { input_tokens: 1, output_tokens: 1 } }));
+      }
+    });
+  }, async (baseURL) => {
+    await runWithRequestId("req_forward_headers", async () => {
+      setClientRequestHeaders(clientHeaders);
+      const base = { name: "alpha", base_url: baseURL, api_key: "test-key", model: "upstream-alpha" };
+      await passthroughRequest({ ...base, provider: "openai-responses" }, { model: "alpha", input: "hi" });
+      await passthroughRequest({ ...base, provider: "anthropic" }, { model: "alpha", max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+      await passthroughRequest({ ...base, provider: "openai-chat" }, { model: "alpha", messages: [{ role: "user", content: "hi" }] });
+      await forwardRequest({ ...base, provider: "anthropic" }, normalizeOpenAIResponsesRequest({ model: "alpha", input: "hi" } as any));
+    });
+  });
+
+  const [responses, anthropic, chat, converted] = received;
+  assert.equal(responses.session_id, "sess-1");
+  assert.equal(responses.thread_id, "thread-1");
+  assert.equal(responses["x-codex-turn-state"], "turn-1");
+  assert.equal(responses["x-openai-subagent"], "review");
+  assert.equal(responses.conversation_id, "conv-1");
+  assert.equal(responses.version, "0.99.0");
+  assert.equal(responses["x-codex-routing-hint"], undefined);
+  assert.equal(responses["anthropic-beta"], undefined);
+  assert.equal(responses.authorization, "Bearer test-key");
+  assert.equal(responses.cookie, undefined);
+  assert.equal(responses["x-forwarded-for"], undefined);
+
+  assert.equal(anthropic["anthropic-beta"], "prompt-caching-2024-07-31");
+  assert.equal(anthropic["anthropic-version"], "2023-06-01");
+  assert.equal(anthropic["x-api-key"], "test-key");
+  assert.equal(anthropic.session_id, undefined);
+  assert.equal(anthropic["x-codex-turn-state"], undefined);
+  assert.equal(anthropic.authorization, undefined);
+
+  assert.equal(chat.session_id, undefined);
+  assert.equal(chat["anthropic-beta"], undefined);
+  assert.equal(chat["x-codex-turn-state"], undefined);
+
+  // Responses client converted to an Anthropic upstream: Codex headers must not leak.
+  assert.equal(converted["x-codex-turn-state"], undefined);
+  assert.equal(converted.session_id, undefined);
+});
+
+run("codex subscription headers fall back to prompt_cache_key and add routing hint", () => {
+  const derived: Record<string, string> = {};
+  applyCodexSubscriptionHeaders(derived, { model: "gpt-5.5", prompt_cache_key: " pck-1 ", stream: true, service_tier: "fast" });
+  assert.deepEqual(derived, {
+    session_id: "pck-1",
+    conversation_id: "pck-1",
+    accept: "text/event-stream",
+    "x-codex-routing-hint": "model=gpt-5.5;tier=priority",
+  });
+
+  const fromClient: Record<string, string> = { session_id: "sess-1", conversation_id: "conv-1", accept: "application/json" };
+  applyCodexSubscriptionHeaders(fromClient, { model: "gpt-5.5", prompt_cache_key: "pck-1", stream: true, service_tier: "auto" });
+  assert.deepEqual(fromClient, {
+    session_id: "sess-1",
+    conversation_id: "conv-1",
+    accept: "application/json",
+    "x-codex-routing-hint": "model=gpt-5.5",
+  });
+
+  const invalidModel: Record<string, string> = {};
+  applyCodexSubscriptionHeaders(invalidModel, { model: "a;b=c", stream: false });
+  assert.deepEqual(invalidModel, {});
+});
+
 await runAsync("model bodyExpression rewrites passthrough upstream request body", async () => {
   let upstreamBody: any;
   await withHTTPServer(async (req, res) => {
@@ -5854,4 +5953,217 @@ run("startup error disposes resources and exits on occupied port", () => {
   assert.deepEqual(calls, ["dispose", "exit:1"]);
   assert.equal(logs[0]?.[0], "Failed to start nanollm: port 3000 is already in use.");
   assert.equal(logs[1]?.[0], "Use a different port in config.yaml, stop the other process, or set PORT.");
+});
+
+run("upstream model ids are extracted from openai, anthropic and bare list payloads", () => {
+  assert.deepEqual(extractUpstreamModelIds({ data: [{ id: "a" }, { id: " b " }, { id: "" }, { name: "x" }, null] }), ["a", "b"]);
+  assert.deepEqual(extractUpstreamModelIds({ models: [{ id: "m1" }, "m2"] }), ["m1", "m2"]);
+  assert.deepEqual(extractUpstreamModelIds([{ id: "z" }]), ["z"]);
+  assert.deepEqual(extractUpstreamModelIds({ error: "nope" }), []);
+});
+
+await runAsync("fetchUpstreamModels calls /models with openai bearer auth and env-resolved key", async () => {
+  process.env.NANOLLM_TEST_MODELS_KEY = "env-secret";
+  const seen: { url?: string; auth?: string } = {};
+  await withHTTPServer((req, res) => {
+    seen.url = req.url;
+    seen.auth = String(req.headers.authorization);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ data: [{ id: "gpt-b" }, { id: "gpt-a" }, { id: "gpt-b" }] }));
+  }, async (baseURL) => {
+    const ids = await fetchUpstreamModels(
+      { provider: "openai-chat", base_url: baseURL + "/v1/", api_key: "${NANOLLM_TEST_MODELS_KEY}" },
+      { env: {} },
+    );
+    assert.deepEqual(ids, ["gpt-a", "gpt-b"]);
+  });
+  assert.equal(seen.url, "/v1/models");
+  assert.equal(seen.auth, "Bearer env-secret");
+  delete process.env.NANOLLM_TEST_MODELS_KEY;
+});
+
+await runAsync("fetchUpstreamModels pages anthropic models with x-api-key", async () => {
+  const seen: { key?: string; version?: string; urls: string[] } = { urls: [] };
+  await withHTTPServer((req, res) => {
+    seen.urls.push(String(req.url));
+    seen.key = String(req.headers["x-api-key"]);
+    seen.version = String(req.headers["anthropic-version"]);
+    res.setHeader("content-type", "application/json");
+    const paged = String(req.url).includes("after_id=c2");
+    res.end(JSON.stringify(paged
+      ? { data: [{ id: "c3" }], has_more: false, last_id: "c3" }
+      : { data: [{ id: "c1" }, { id: "c2" }], has_more: true, last_id: "c2" }));
+  }, async (baseURL) => {
+    const ids = await fetchUpstreamModels({ provider: "anthropic", base_url: baseURL + "/v1", api_key: "k" }, { env: {} });
+    assert.deepEqual(ids, ["c1", "c2", "c3"]);
+  });
+  assert.equal(seen.key, "k");
+  assert.equal(seen.version, "2023-06-01");
+  assert.deepEqual(seen.urls, ["/v1/models?limit=1000", "/v1/models?limit=1000&after_id=c2"]);
+});
+
+await runAsync("fetchUpstreamModels reports upstream errors and invalid input", async () => {
+  await withHTTPServer((_req, res) => {
+    res.statusCode = 401;
+    res.end("bad key");
+  }, async (baseURL) => {
+    await assert.rejects(
+      fetchUpstreamModels({ provider: "openai-chat", base_url: baseURL, api_key: "x" }, { env: {} }),
+      /HTTP 401.*bad key/,
+    );
+  });
+  await assert.rejects(fetchUpstreamModels({ provider: "openai-subscription", base_url: "http://x", api_key: "" }), /不支持/);
+  await assert.rejects(fetchUpstreamModels({ provider: "openai-chat", base_url: " ", api_key: "" }), /base_url/);
+});
+
+run("admin page disables testing unsaved models and groups custom provider models", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function isModelSaved\(model\)/);
+  assert.match(html, /if \(!isModelSaved\(model\)\) \{/);
+  assert.match(html, /testButton\.disabled = true/);
+  assert.match(html, /"\/admin\/upstream-models"/);
+  assert.match(html, /function openFetchModelsDialog\(provider\)/);
+  assert.match(html, /createActionButton\("拉取模型"/);
+  assert.match(html, /"全选"/);
+  assert.match(html, /function buildModelGroupCard/);
+  assert.match(html, /const expandedModelGroups = new Set\(\)/);
+  assert.match(html, /加供应商名后缀/);
+  assert.match(html, /createActionButton\("删除全部模型"/);
+  assert.match(html, /function isGroupSuffixed\(providerName\)/);
+});
+
+run("codex catalog payloads expose models by slug", () => {
+  assert.deepEqual(extractUpstreamModelIds({ models: [{ slug: "gpt-5-codex", display_name: "GPT-5 Codex" }, { slug: "gpt-5" }] }), ["gpt-5-codex", "gpt-5"]);
+});
+
+run("admin page fetches subscription models from saved credentials and lists provider groups first", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /"\/admin\/providers\/" \+ encodeURIComponent\(providerName\) \+ "\/models"/);
+  assert.doesNotMatch(html, /if \(!SUBSCRIPTION_PROVIDERS\.includes\(provider\.provider\)\) \{\n\s+actions\.appendChild\(createActionButton\("拉取模型"/);
+  assert.match(html, /const showHeadings = groupKeys\.length > 0 && standalone\.length > 0/);
+  assert.match(html, /\.card\.group-card \{/);
+  assert.match(html, /kindBadge\.textContent = "供应商"/);
+});
+
+run("admin page marks conflicting model and fallback names at provider, model and banner level", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function getNameConflicts\(\)/);
+  assert.match(html, /formState\.fallbackGroups\.forEach\(\(group\) => add\(normalizeModelRef\(group\.name\), \{ label: "fallback 分组"/);
+  assert.match(html, /function buildConflictBanner\(conflicts\)/);
+  assert.match(html, /function locateModel\(model\)/);
+  assert.match(html, /个模型名冲突/);
+  assert.match(html, /badge\.textContent = "⚠ 名称冲突"/);
+  assert.match(html, /invalid: Boolean\(nameConflict\)/);
+  assert.match(html, /invalid: Boolean\(groupNameSources\)/);
+  assert.match(html, /\.card\.group-card\.conflict \{/);
+});
+
+run("admin page links provider cards to their model groups and back", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.match(html, /function locateModelGroup\(providerName\)/);
+  assert.match(html, /function locateProvider\(provider\)/);
+  assert.match(html, /" 个模型" \+ \(conflictedCount > 0/);
+  assert.match(html, /modelsLink\.disabled = providerModels\.length === 0/);
+  assert.match(html, /card\.setAttribute\("data-model-group", providerName\)/);
+  assert.match(html, /createActionButton\("编辑供应商"/);
+});
+
+run("codex model catalog request carries the Codex CLI identity and a version at or above the upstream floor", () => {
+  const { url, headers } = buildSubscriptionModelsRequest("tok", "acct-1");
+  assert.equal(url, `https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_CLI_VERSION}`);
+  assert.equal(headers.Authorization, "Bearer tok");
+  assert.equal(headers["ChatGPT-Account-Id"], "acct-1");
+  assert.equal(headers.Originator, CODEX_CLI_ORIGINATOR);
+  assert.equal(headers["User-Agent"], CODEX_CLI_USER_AGENT);
+  assert.equal(headers.Version, CODEX_CLI_VERSION);
+  // Originator must pair with the User-Agent prefix, and older versions are rejected upstream (sub2api #3901).
+  assert.ok(CODEX_CLI_USER_AGENT.startsWith(CODEX_CLI_ORIGINATOR + "/" + CODEX_CLI_VERSION));
+  const [major, minor] = CODEX_CLI_VERSION.split(".").map(Number);
+  assert.ok(major > 0 || minor >= 144);
+  assert.equal("ChatGPT-Account-Id" in buildSubscriptionModelsRequest("tok").headers, false);
+});
+
+run("claude model list request uses the Claude Code identity headers over the plain oauth fallback", () => {
+  const identity: Record<string, string> = {};
+  applyClaudeSubscriptionHeaders(identity);
+  const headers = buildClaudeModelsHeaders("tok", identity);
+  assert.equal(headers.Authorization, "Bearer tok");
+  assert.equal(headers["anthropic-version"], "2023-06-01");
+  assert.match(headers["anthropic-beta"], /claude-code-20250219/);
+  assert.match(headers["anthropic-beta"], /oauth-2025-04-20/);
+  assert.match(headers["User-Agent"], /^claude-cli\//);
+  assert.equal(headers["x-app"], "cli");
+  assert.equal(headers.Accept, "application/json");
+
+  const fallback = buildClaudeModelsHeaders("tok");
+  assert.equal(fallback["anthropic-beta"], "oauth-2025-04-20");
+  assert.equal(fallback.Authorization, "Bearer tok");
+});
+
+run("codex release tags are parsed into stable versions above the upstream floor", () => {
+  assert.equal(parseCodexReleaseVersion("rust-v0.159.2"), "0.159.2");
+  assert.equal(parseCodexReleaseVersion("v0.160.0"), "0.160.0");
+  assert.equal(parseCodexReleaseVersion("rust-v0.160.0-alpha.1"), undefined);
+  assert.equal(parseCodexReleaseVersion("rust-v0.143.9"), undefined);
+  assert.equal(parseCodexReleaseVersion(undefined), undefined);
+});
+
+run("codex model catalog request reports the supplied client version consistently", () => {
+  const { url, headers } = buildSubscriptionModelsRequest("tok", undefined, "0.159.2");
+  assert.equal(url, "https://chatgpt.com/backend-api/codex/models?client_version=0.159.2");
+  assert.equal(headers.Version, "0.159.2");
+  assert.ok(headers["User-Agent"].startsWith(`${CODEX_CLI_ORIGINATOR}/0.159.2 `));
+});
+
+await runAsync("fetchLatestCodexVersion reads the latest stable release and rejects unusable responses", async () => {
+  let payload: unknown = { tag_name: "rust-v0.159.2" };
+  let status = 200;
+  await withHTTPServer((_req, res) => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(payload));
+  }, async (baseURL) => {
+    assert.equal(await fetchLatestCodexVersion({ url: baseURL }), "0.159.2");
+    payload = { tag_name: "rust-v0.160.0-alpha.1" };
+    await assert.rejects(fetchLatestCodexVersion({ url: baseURL }), /unusable version/);
+    status = 500;
+    await assert.rejects(fetchLatestCodexVersion({ url: baseURL }), /500/);
+  });
+});
+
+run("admin page only blocks subscription model fetching on this provider's own unsaved state", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.doesNotMatch(html, /if \(!saved \|\| dirty\)/);
+  assert.match(html, /if \(!saved\) \{ window\.alert\("该订阅供应商还没有保存/);
+  assert.match(html, /\(saved\.proxy \|\| ""\) !== \(provider\.proxy \|\| ""\)\.trim\(\)/);
 });

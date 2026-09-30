@@ -14,6 +14,7 @@ export interface ModelConfig {
   model: string;
   custom_provider?: string;
   subscription_provider?: string;
+  claude_subscription_provider?: string;
   image?: boolean;
   ttfb_timeout?: number;
   allow_h2?: boolean;
@@ -28,9 +29,16 @@ export interface ModelConfig {
   ignore_invalid_history?: boolean;
 }
 
+export type SubscriptionProviderType = "openai-subscription" | "claude-subscription";
+export const CLAUDE_SUBSCRIPTION_BASE_URL = "https://api.anthropic.com/v1";
+
+export function isSubscriptionProviderType(value: unknown): value is SubscriptionProviderType {
+  return value === "openai-subscription" || value === "claude-subscription";
+}
+
 export interface CustomProviderConfig {
   name: string;
-  provider: StreamFormat | "openai-subscription";
+  provider: StreamFormat | SubscriptionProviderType;
   base_url: string;
   api_key: string;
   proxy?: string;
@@ -75,7 +83,7 @@ export function getPublicModelNames(config: ServerConfig): string[] {
   return [...Object.keys(config.fallback), ...config.models.map((model) => model.name)];
 }
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string): string {
   return value.replace(/\$\{(\w+)\}/g, (_, key) => process.env[key] ?? "");
 }
 
@@ -240,12 +248,13 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
     if (providerNames.has(provider.name)) throw new Error(`Duplicate provider name '${provider.name}'`);
     providerNames.add(provider.name);
     if (!provider.provider) throw new Error(`Provider '${provider.name}' missing 'provider'`);
-    if (provider.provider !== "openai-subscription" && !provider.base_url) throw new Error(`Provider '${provider.name}' missing 'base_url'`);
-    if (provider.provider !== "openai-subscription" && !['openai-chat', 'openai-responses', 'anthropic', 'openai-image'].includes(provider.provider)) {
+    const subscription = isSubscriptionProviderType(provider.provider);
+    if (!subscription && !provider.base_url) throw new Error(`Provider '${provider.name}' missing 'base_url'`);
+    if (!subscription && !['openai-chat', 'openai-responses', 'anthropic', 'openai-image'].includes(provider.provider)) {
       throw new Error(`Provider '${provider.name}' has invalid provider '${provider.provider}'`);
     }
-    if (provider.provider === "openai-subscription" && (provider.base_url || provider.api_key)) {
-      throw new Error(`Provider '${provider.name}' of type 'openai-subscription' cannot configure 'base_url' or 'api_key'`);
+    if (subscription && (provider.base_url || provider.api_key)) {
+      throw new Error(`Provider '${provider.name}' of type '${provider.provider}' cannot configure 'base_url' or 'api_key'`);
     }
   }
   const models = (document.models ?? []).map((sourceModel) => {
@@ -265,6 +274,8 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
     const expanded = customProvider
       ? customProvider.provider === "openai-subscription"
         ? { ...sourceModel, custom_provider: customProviderName, subscription_provider: customProviderName, provider: "openai-responses", base_url: "https://chatgpt.com/backend-api/codex", api_key: "", ...(customProvider.proxy ? { provider_proxy: customProvider.proxy } : {}) }
+        : customProvider.provider === "claude-subscription"
+        ? { ...sourceModel, custom_provider: customProviderName, claude_subscription_provider: customProviderName, provider: "anthropic", base_url: CLAUDE_SUBSCRIPTION_BASE_URL, api_key: "", ...(customProvider.proxy ? { provider_proxy: customProvider.proxy } : {}) }
         : { ...sourceModel, custom_provider: customProviderName, provider: customProvider.provider, base_url: customProvider.base_url, api_key: customProvider.api_key, ...(customProvider.proxy ? { provider_proxy: customProvider.proxy } : {}) }
       : { ...sourceModel, api_key: resolveEnvVars(String(sourceModel.api_key || "")) };
     return normalizeModelConfig(expanded as ModelConfig, defaultTTFBTimeout);

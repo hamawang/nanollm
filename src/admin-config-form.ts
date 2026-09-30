@@ -169,7 +169,7 @@ export function buildYamlTextFromAdminForm(form: AdminConfigForm, options?: { pr
         return {
           name: entry.name ?? "",
           provider: entry.provider ?? "",
-          ...(entry.provider === "openai-subscription" ? {} : { base_url: entry.base_url ?? "", api_key: entry.api_key ?? "" }),
+          ...(entry.provider === "openai-subscription" || entry.provider === "claude-subscription" ? {} : { base_url: entry.base_url ?? "", api_key: entry.api_key ?? "" }),
           ...(proxy ? { proxy } : {}),
         };
       })

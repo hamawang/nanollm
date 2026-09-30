@@ -20,9 +20,20 @@ import {
   setRecordedAttemptResponseMeta,
 } from "./record.js";
 import { runInNewContext } from "node:vm";
+import { createHash, randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { extractErrorCauses } from "./error-details.js";
+import { getClientIp, getClientRequestHeaders } from "./request-context.js";
 import { getCachedSubscriptionCredential, ensureSubscriptionCredential, SUBSCRIPTION_URL } from "./openai-subscription.js";
+import { CLAUDE_CODE_DEFAULT_HEADERS, CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT } from "./subscription-client-compat.js";
+import { addClaudeBillingBlock } from "./claude-billing.js";
+import {
+  CLAUDE_CODE_BETA,
+  CLAUDE_MESSAGES_URL,
+  CLAUDE_OAUTH_BETA,
+  ensureClaudeSubscriptionCredential,
+  getCachedClaudeSubscriptionCredential,
+} from "./claude-subscription.js";
 
 export interface UpstreamRequestOptions {
   userAgent?: string;
@@ -47,6 +58,7 @@ export function getUpstreamURL(config: ModelConfig): string {
 
 export function getUpstreamURLForPath(config: ModelConfig, imageOperation?: OpenAIImageOperation): string {
   if (config.subscription_provider) return `${SUBSCRIPTION_URL}/responses`;
+  if (config.claude_subscription_provider) return CLAUDE_MESSAGES_URL;
   const base = config.base_url.replace(/\/+$/, "");
   switch (config.provider) {
     case "openai-chat":
@@ -77,7 +89,14 @@ function getAuthHeaders(config: ModelConfig): Record<string, string> {
     return {
       Authorization: `Bearer ${credential.accessToken}`,
       ...(credential.accountId ? { "ChatGPT-Account-Id": credential.accountId } : {}),
-      originator: "codex_cli_rs",
+    };
+  }
+  if (config.claude_subscription_provider) {
+    const credential = getCachedClaudeSubscriptionCredential(config.claude_subscription_provider);
+    if (!credential) throw new Error(`Claude subscription provider '${config.claude_subscription_provider}' is not authenticated`);
+    return {
+      Authorization: `Bearer ${credential.accessToken}`,
+      "anthropic-version": "2023-06-01",
     };
   }
   switch (config.provider) {
@@ -327,13 +346,118 @@ function normalizeUpstreamResponse(provider: StreamFormat, body: unknown): Norma
 
 // ─── Shared fetch ───────────────────────────────────────────────────────────
 
-function getForwardHeaders(config: ModelConfig, options?: UpstreamRequestOptions): Record<string, string> {
-  return {
+const OPENAI_RESPONSES_FORWARDED_HEADERS = new Set(["session_id", "thread_id", "conversation_id", "version"]);
+const OPENAI_RESPONSES_FORWARDED_HEADER_PREFIXES = ["x-openai-", "x-codex-"];
+const ANTHROPIC_FORWARDED_HEADER_PREFIXES = ["anthropic-"];
+// Claude Code identifies itself with these on top of anthropic-*; keep them when talking to the subscription backend.
+const CLAUDE_SUBSCRIPTION_FORWARDED_HEADERS = new Set(["accept", "user-agent", "x-app", "x-client-app", "x-client-request-id"]);
+const CLAUDE_SUBSCRIPTION_FORWARDED_HEADER_PREFIXES = ["x-claude-code-", "x-claude-remote-", "x-stainless-"];
+// Gateway-owned: always derived from the final upstream request body, never taken from the client.
+const CODEX_ROUTING_HINT_HEADER = "x-codex-routing-hint";
+const CODEX_ROUTING_HINT_TIERS: Record<string, string> = { priority: "priority", fast: "priority", flex: "flex", ultrafast: "ultrafast" };
+
+function shouldForwardClientHeader(config: ModelConfig, name: string): boolean {
+  if (config.claude_subscription_provider && (CLAUDE_SUBSCRIPTION_FORWARDED_HEADERS.has(name) || CLAUDE_SUBSCRIPTION_FORWARDED_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix)))) {
+    return true;
+  }
+  switch (config.provider) {
+    case "openai-responses":
+      if (name === CODEX_ROUTING_HINT_HEADER) return false;
+      return OPENAI_RESPONSES_FORWARDED_HEADERS.has(name) || OPENAI_RESPONSES_FORWARDED_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix));
+    case "anthropic":
+      return ANTHROPIC_FORWARDED_HEADER_PREFIXES.some((prefix) => name.startsWith(prefix));
+    default:
+      return false;
+  }
+}
+
+/** Client headers that the upstream provider uses for session affinity / prompt cache routing. */
+function getForwardedClientHeaders(config: ModelConfig): Record<string, string> {
+  const incoming = getClientRequestHeaders();
+  if (!incoming) return {};
+  const headers: Record<string, string> = {};
+  for (const [key, value] of incoming.entries()) {
+    const name = key.toLowerCase();
+    if (shouldForwardClientHeader(config, name)) headers[name] = value;
+  }
+  return headers;
+}
+
+/** Codex backend (ChatGPT subscription) routes prompt cache by session headers and the routing hint. */
+export function applyCodexSubscriptionHeaders(headers: Record<string, string>, body: unknown): void {
+  if (!isPlainObject(body)) return;
+  const promptCacheKey = typeof body.prompt_cache_key === "string" ? body.prompt_cache_key.trim() : "";
+  if (promptCacheKey) {
+    headers.session_id ||= promptCacheKey;
+    headers.conversation_id ||= promptCacheKey;
+  }
+  if (body.stream === true) headers.accept ||= "text/event-stream";
+
+  const model = typeof body.model === "string" ? body.model.trim() : "";
+  if (!model || /[;=\r\n]/.test(model)) return;
+  const tier = typeof body.service_tier === "string" ? CODEX_ROUTING_HINT_TIERS[body.service_tier.toLowerCase()] : undefined;
+  headers[CODEX_ROUTING_HINT_HEADER] = tier ? `model=${model};tier=${tier}` : `model=${model}`;
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const lower = name.toLowerCase();
+  for (const key of Object.keys(headers)) if (key.toLowerCase() === lower) delete headers[key];
+  headers[name] = value;
+}
+
+function getHeader(headers: Record<string, string>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const key = Object.keys(headers).find((item) => item.toLowerCase() === lower);
+  return key === undefined ? undefined : headers[key];
+}
+
+/**
+ * Claude subscription headers use sub2api's Claude Code defaults:
+ * https://github.com/Wei-Shaw/sub2api/blob/9a62841fd124d026cf3694fcf9b79e98addcdbdc/backend/internal/pkg/claude/constants.go
+ * Add the OAuth and Claude Code betas alongside those defaults.
+ * Client-supplied values win; only absent headers receive defaults.
+ */
+export function applyClaudeSubscriptionHeaders(headers: Record<string, string>, stream = false): void {
+  const betas = (getHeader(headers, "anthropic-beta") ?? "").split(",").map((beta) => beta.trim()).filter(Boolean);
+  for (const beta of [CLAUDE_CODE_BETA, CLAUDE_OAUTH_BETA]) if (!betas.includes(beta)) betas.push(beta);
+  setHeader(headers, "anthropic-beta", betas.join(","));
+  for (const [name, value] of Object.entries(CLAUDE_CODE_DEFAULT_HEADERS)) {
+    if (!getHeader(headers, name)) setHeader(headers, name, value);
+  }
+  if (stream && !getHeader(headers, "x-stainless-helper-method")) setHeader(headers, "x-stainless-helper-method", "stream");
+  if (!getHeader(headers, "x-client-request-id")) setHeader(headers, "x-client-request-id", randomUUID());
+  if (!getHeader(headers, "x-claude-code-session-id")) {
+    const ip = getClientIp() || "unknown";
+    const day = new Date().toISOString().slice(0, 10);
+    setHeader(headers, "x-claude-code-session-id", `${day}-${createHash("sha256").update(ip).digest("hex").slice(0, 24)}`);
+  }
+}
+
+function applyCodexSubscriptionIdentityHeaders(headers: Record<string, string>, incoming = getClientRequestHeaders()): void {
+  const originator = incoming?.get("originator")?.trim();
+  const userAgent = incoming?.get("user-agent")?.trim();
+  // Forward an intact client identity; otherwise send one consistent Codex CLI pair.
+  setHeader(headers, "originator", originator && userAgent ? originator : CODEX_CLI_ORIGINATOR);
+  setHeader(headers, "User-Agent", originator && userAgent ? userAgent : CODEX_CLI_USER_AGENT);
+}
+
+function getForwardHeaders(config: ModelConfig, body: unknown, options?: UpstreamRequestOptions): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...getForwardedClientHeaders(config),
     "Content-Type": "application/json",
     ...getAuthHeaders(config),
     ...(options?.userAgent ? { "User-Agent": options.userAgent } : {}),
-    ...(config.headers ?? {}),
   };
+  if (config.claude_subscription_provider) applyClaudeSubscriptionHeaders(headers, isPlainObject(body) && body.stream === true);
+  if (config.subscription_provider) {
+    applyCodexSubscriptionIdentityHeaders(headers);
+    applyCodexSubscriptionHeaders(headers, body);
+  }
+  if (config.claude_subscription_provider) {
+    for (const [name, value] of Object.entries(config.headers ?? {})) setHeader(headers, name, value);
+    return headers;
+  }
+  return { ...headers, ...(config.headers ?? {}) };
 }
 
 export function resolveProxyUrl(config: ModelConfig): string | undefined {
@@ -358,19 +482,22 @@ export function createUpstreamDispatcher(config: ModelConfig, proxyUrl = resolve
 
 async function upstreamFetch(
   config: ModelConfig,
-  body: string,
+  body: unknown,
   stream: boolean,
   options?: UpstreamRequestOptions,
 ): Promise<{ response: Response; timing: UpstreamTiming }> {
   if (config.subscription_provider) await ensureSubscriptionCredential(config.subscription_provider);
+  if (config.claude_subscription_provider) await ensureClaudeSubscriptionCredential(config.claude_subscription_provider);
+  const headers = getForwardHeaders(config, body, options);
+  const upstreamBody = config.claude_subscription_provider ? addClaudeBillingBlock(body, getHeader(headers, "user-agent")) : body;
   return upstreamFetchToUrl(
     config,
     getUpstreamURL(config),
-    body,
+    JSON.stringify(upstreamBody),
     stream,
-    getForwardHeaders(config, options),
+    headers,
     options,
-    options?.recordedRequestBody ?? body,
+    upstreamBody,
   );
 }
 
@@ -647,12 +774,13 @@ function getRawForwardHeaders(
     if (skipped.has(key.toLowerCase())) continue;
     headers[key] = value;
   }
-  return {
+  const forwardHeaders = {
     ...headers,
     ...getAuthHeaders(config),
     ...(options?.userAgent ? { "User-Agent": options.userAgent } : {}),
-    ...(config.headers ?? {}),
   };
+  if (config.subscription_provider) applyCodexSubscriptionIdentityHeaders(forwardHeaders, incomingHeaders);
+  return { ...forwardHeaders, ...(config.headers ?? {}) };
 }
 
 export async function passthroughRawRequest(
@@ -710,7 +838,7 @@ export async function passthroughAlphaSearchRequest(
     url,
     JSON.stringify(body),
     false,
-    getForwardHeaders(config, options),
+    getForwardHeaders(config, body, options),
     options,
     body,
   );
@@ -729,7 +857,7 @@ export async function passthroughRequest(
   options?: UpstreamRequestOptions,
 ): Promise<{ json: unknown; timing: UpstreamTiming; usage?: NormalizedUsage }> {
   const body = preparePassthroughBody(config, rawBody, false);
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
   const parsed = JSON.parse(text);
@@ -744,7 +872,7 @@ export async function passthroughStreamRequest(
   options?: UpstreamRequestOptions,
 ): Promise<{ body: ReadableStream<Uint8Array>; headers: Headers; timing: UpstreamTiming }> {
   const body = preparePassthroughBody(config, rawBody, true);
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0, config, headers: response.headers });
   return { body: validatedBody, headers: response.headers, timing };
@@ -762,7 +890,7 @@ export async function forwardRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
   const parsed = JSON.parse(text);
@@ -781,7 +909,7 @@ export async function forwardStreamRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, { ...options, recordedRequestBody: body });
+  const { response, timing } = await upstreamFetch(config, body, true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0, config, headers: response.headers });
   return { body: validatedBody, upstreamFormat: config.provider, timing };
