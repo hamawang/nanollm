@@ -18,6 +18,7 @@ import {
   fail,
   joinOpenAIResponsesNamespacePath,
   makeDataUrl,
+  normalizeReasoningEffort,
   normalizeReasoningEffortFromBudget,
   parseDataUrl,
   parseJson,
@@ -32,6 +33,7 @@ import {
 import { isResponsesCustomToolName, markResponsesCustomToolName } from "../request-context.js";
 
 export interface AnthropicRequestConversionOptions {
+  defaultMaxOutputTokens?: number;
   ignoreInvalidHistory?: boolean;
 }
 
@@ -72,7 +74,7 @@ export function normalizeOpenAIChatRequest(request: OpenAIChatRequest): Normaliz
     promptCacheKey: request.prompt_cache_key ?? (request as any).promptCacheKey,
     promptCacheRetention: request.prompt_cache_retention ?? (request as any).promptCacheRetention ?? null,
     safetyIdentifier: request.safety_identifier,
-    reasoningEffort: request.reasoning_effort ?? request.reasoning?.effort ?? null,
+    reasoningEffort: normalizeReasoningEffort(request.reasoning_effort ?? request.reasoning?.effort),
     thinkingBudgetTokens: null,
     textVerbosity: request.verbosity ?? null,
     responseFormat: normalizeOpenAIChatResponseFormat(request.response_format as any),
@@ -109,7 +111,7 @@ export function normalizeOpenAIResponsesRequest(request: OpenAIResponsesRequest)
     promptCacheKey: request.prompt_cache_key ?? (request as any).promptCacheKey,
     promptCacheRetention: request.prompt_cache_retention ?? (request as any).promptCacheRetention ?? null,
     safetyIdentifier: request.safety_identifier,
-    reasoningEffort: request.reasoning?.effort ?? null,
+    reasoningEffort: normalizeReasoningEffort(request.reasoning?.effort),
     thinkingBudgetTokens: null,
     textVerbosity: request.text?.verbosity ?? null,
     responseFormat: normalizeOpenAIResponsesFormat(request.text?.format as any),
@@ -167,7 +169,7 @@ export function normalizeAnthropicRequest(request: AnthropicMessagesRequest): No
 }
 
 export function denormalizeToOpenAIChatRequest(request: NormalizedRequest): OpenAIChatRequest {
-  const reasoningEffort = normalizeOpenAITargetReasoningEffort(request.reasoningEffort, request.thinkingBudgetTokens, "OpenAI Chat");
+  const reasoningEffort = request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens);
   return {
     model: request.model,
     messages: denormalizeOpenAIChatMessages(reorderMessagesForOpenAIChatToolResults(request.messages), request.image ?? true),
@@ -306,7 +308,7 @@ function denormalizeOpenAIChatMessages(messages: NormalizedMessage[], imageEnabl
 }
 
 export function denormalizeToOpenAIResponsesRequest(request: NormalizedRequest): OpenAIResponsesRequest {
-  const reasoningEffort = normalizeOpenAITargetReasoningEffort(request.reasoningEffort, request.thinkingBudgetTokens, "OpenAI Responses");
+  const reasoningEffort = request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens);
   const instructionLines: string[] = [];
   let index = 0;
   while (index < request.messages.length) {
@@ -343,7 +345,7 @@ export function denormalizeToOpenAIResponsesRequest(request: NormalizedRequest):
 export function denormalizeToAnthropicRequest(request: NormalizedRequest, options?: AnthropicRequestConversionOptions): MessageCreateParamsBase {
   const systemBlocks: { type: "text"; text: string }[] = [];
   const filteredMessages: NormalizedMessage[] = [];
-  const maxTokens = request.maxOutputTokens ?? 32000;
+  const maxTokens = request.maxOutputTokens ?? options?.defaultMaxOutputTokens ?? 32000;
   const ignoreInvalidHistory = options?.ignoreInvalidHistory ?? true;
   
   for (const message of request.messages) {
@@ -1171,15 +1173,6 @@ function denormalizeAnthropicOutputConfig(responseFormat: NormalizedRequest["res
 function denormalizeAnthropicThinking(reasoningEffort: string | null | undefined, thinkingBudgetTokens: number | null | undefined) {
   if (!reasoningEffort && thinkingBudgetTokens == null) return undefined;
   return { type: "adaptive" as const };
-}
-
-function normalizeOpenAITargetReasoningEffort(reasoningEffort: string | null | undefined, thinkingBudgetTokens: number | null | undefined, target: string) {
-  const effort = reasoningEffort ?? normalizeReasoningEffortFromBudget(thinkingBudgetTokens);
-  if (effort === "max") {
-    console.warn(`[CONVERTER] Mapping reasoning effort "max" to "xhigh" for ${target}; OpenAI does not support "max".`);
-    return "xhigh";
-  }
-  return effort;
 }
 
 function normalizeOpenAIServiceTier(tier: string | null | undefined): OpenAIChatRequest["service_tier"] | undefined {
