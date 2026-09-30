@@ -29,6 +29,7 @@ import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { buildAdminConfigForm, buildYamlTextFromAdminForm } from "../src/admin-config-form.js";
 import { buildModelTestRequest, extractModelTestReply } from "../src/model-test.js";
 import { buildSubscriptionModelsRequest } from "../src/openai-subscription.js";
+import { fetchLatestCodexVersion, parseCodexReleaseVersion } from "../src/codex-version.js";
 import { buildClaudeModelsHeaders } from "../src/claude-subscription.js";
 import { CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT, CODEX_CLI_VERSION } from "../src/subscription-client-compat.js";
 import { extractUpstreamModelIds, fetchUpstreamModels } from "../src/upstream-models.js";
@@ -6121,4 +6122,48 @@ run("claude model list request uses the Claude Code identity headers over the pl
   const fallback = buildClaudeModelsHeaders("tok");
   assert.equal(fallback["anthropic-beta"], "oauth-2025-04-20");
   assert.equal(fallback.Authorization, "Bearer tok");
+});
+
+run("codex release tags are parsed into stable versions above the upstream floor", () => {
+  assert.equal(parseCodexReleaseVersion("rust-v0.159.2"), "0.159.2");
+  assert.equal(parseCodexReleaseVersion("v0.160.0"), "0.160.0");
+  assert.equal(parseCodexReleaseVersion("rust-v0.160.0-alpha.1"), undefined);
+  assert.equal(parseCodexReleaseVersion("rust-v0.143.9"), undefined);
+  assert.equal(parseCodexReleaseVersion(undefined), undefined);
+});
+
+run("codex model catalog request reports the supplied client version consistently", () => {
+  const { url, headers } = buildSubscriptionModelsRequest("tok", undefined, "0.159.2");
+  assert.equal(url, "https://chatgpt.com/backend-api/codex/models?client_version=0.159.2");
+  assert.equal(headers.Version, "0.159.2");
+  assert.ok(headers["User-Agent"].startsWith(`${CODEX_CLI_ORIGINATOR}/0.159.2 `));
+});
+
+await runAsync("fetchLatestCodexVersion reads the latest stable release and rejects unusable responses", async () => {
+  let payload: unknown = { tag_name: "rust-v0.159.2" };
+  let status = 200;
+  await withHTTPServer((_req, res) => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(payload));
+  }, async (baseURL) => {
+    assert.equal(await fetchLatestCodexVersion({ url: baseURL }), "0.159.2");
+    payload = { tag_name: "rust-v0.160.0-alpha.1" };
+    await assert.rejects(fetchLatestCodexVersion({ url: baseURL }), /unusable version/);
+    status = 500;
+    await assert.rejects(fetchLatestCodexVersion({ url: baseURL }), /500/);
+  });
+});
+
+run("admin page only blocks subscription model fetching on this provider's own unsaved state", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "config.yaml",
+    effectiveConfig: { port: 3000, models: [], providers: [], fallback: {}, record: { max_size: 10 } },
+    requiresRestartFields: [],
+    form: { server: { port: "3000", ttfb_timeout: "" }, record: { max_size: "10" }, providers: [], models: [], fallbackGroups: [] },
+  });
+  assert.doesNotMatch(html, /if \(!saved \|\| dirty\)/);
+  assert.match(html, /if \(!saved\) \{ window\.alert\("该订阅供应商还没有保存/);
+  assert.match(html, /\(saved\.proxy \|\| ""\) !== \(provider\.proxy \|\| ""\)\.trim\(\)/);
 });

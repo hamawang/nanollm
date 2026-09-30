@@ -1214,8 +1214,10 @@ const SCRIPT = /* js */ String.raw`
           actions.appendChild(createActionButton("拉取模型", "secondary", () => {
             if (!(provider.name || "").trim()) { window.alert("请先填写供应商名称。"); return; }
             if (SUBSCRIPTION_PROVIDERS.includes(provider.provider)) {
-              const saved = (currentSnapshot.effectiveConfig?.providers || []).some((item) => item.name === provider.name && item.provider === provider.provider);
-              if (!saved || dirty) { window.alert("订阅供应商使用服务端已保存的登录凭证和代理拉取模型，请先保存配置并完成登录。"); return; }
+              // Only this provider's saved entry matters (credentials and proxy come from the server); other unsaved edits do not.
+              const saved = (currentSnapshot.effectiveConfig?.providers || []).find((item) => item.name === provider.name && item.provider === provider.provider);
+              if (!saved) { window.alert("该订阅供应商还没有保存，请先保存配置并完成登录。"); return; }
+              if ((saved.proxy || "") !== (provider.proxy || "").trim()) { window.alert("该供应商的代理有未保存的修改，拉取模型使用服务端已保存的代理，请先保存配置。"); return; }
             } else if (!(provider.base_url || "").trim()) { window.alert("请先填写 base_url。"); return; }
             openFetchModelsDialog(provider);
           }));

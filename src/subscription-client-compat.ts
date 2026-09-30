@@ -1,7 +1,10 @@
 /** CLI compatibility values used by subscription-backed upstreams. Update these when the CLIs change. */
 export const CODEX_CLI_VERSION = "0.146.0";
 export const CODEX_CLI_ORIGINATOR = "codex_cli_rs";
-export const CODEX_CLI_USER_AGENT = `${CODEX_CLI_ORIGINATOR}/${CODEX_CLI_VERSION} (Ubuntu 22.4.0; x86_64) xterm-256color`;
+export function buildCodexCliUserAgent(version: string): string {
+  return `${CODEX_CLI_ORIGINATOR}/${version} (Ubuntu 22.4.0; x86_64) xterm-256color`;
+}
+export const CODEX_CLI_USER_AGENT = buildCodexCliUserAgent(CODEX_CLI_VERSION);
 
 export const CLAUDE_CODE_VERSION = "2.1.284";
 export const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";

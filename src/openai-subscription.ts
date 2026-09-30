@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { CustomProviderConfig } from "./config.js";
 import { oauthPost } from "./oauth-transport.js";
-import { CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT, CODEX_CLI_VERSION } from "./subscription-client-compat.js";
+import { CODEX_CLI_ORIGINATOR, CODEX_CLI_VERSION, buildCodexCliUserAgent } from "./subscription-client-compat.js";
+import { getLatestCodexVersion } from "./codex-version.js";
 import { extractUpstreamModelIds } from "./upstream-models.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -171,16 +172,16 @@ export function getCachedSubscriptionCredential(name: string) { return load(name
  * Request for the Codex model catalog. Mirrors the identity sub2api sends: `Originator` must pair with the
  * `User-Agent` prefix and `Version` must match `client_version` (and stay >= 0.144.0, older values 404 upstream).
  */
-export function buildSubscriptionModelsRequest(accessToken: string, accountId?: string): { url: string; headers: Record<string, string> } {
+export function buildSubscriptionModelsRequest(accessToken: string, accountId?: string, version = CODEX_CLI_VERSION): { url: string; headers: Record<string, string> } {
   return {
-    url: `${SUBSCRIPTION_URL}/models?client_version=${encodeURIComponent(CODEX_CLI_VERSION)}`,
+    url: `${SUBSCRIPTION_URL}/models?client_version=${encodeURIComponent(version)}`,
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`,
       ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
       Originator: CODEX_CLI_ORIGINATOR,
-      "User-Agent": CODEX_CLI_USER_AGENT,
-      Version: CODEX_CLI_VERSION,
+      "User-Agent": buildCodexCliUserAgent(version),
+      Version: version,
     },
   };
 }
@@ -188,10 +189,12 @@ export function buildSubscriptionModelsRequest(accessToken: string, accountId?: 
 /** List the models available to the ChatGPT account through the Codex catalog endpoint (`/models?client_version=`). */
 export async function fetchSubscriptionModels(name: string, proxyUrl?: string): Promise<string[]> {
   let credential = await ensureSubscriptionCredential(name);
+  // The catalog only lists models the reported client version supports, so follow the latest Codex release.
+  const version = await getLatestCodexVersion(proxyUrl);
   const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
   try {
     const request = () => {
-      const { url, headers } = buildSubscriptionModelsRequest(credential.accessToken, credential.accountId);
+      const { url, headers } = buildSubscriptionModelsRequest(credential.accessToken, credential.accountId, version);
       return undiciFetch(url, { dispatcher, headers, cache: "no-store", signal: AbortSignal.timeout(15_000) });
     };
     let response = await request();
