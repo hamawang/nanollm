@@ -27,12 +27,39 @@ export function resolveSqliteConfig(env: NodeJS.ProcessEnv = process.env): Remot
   return { url, authToken };
 }
 
+// Retry only the read-only wake-up probe. A failed write response does not tell
+// us whether the server committed it, so replaying the real request is unsafe.
+export function createSqliteWakeFetch(url: string, authToken?: string, options: {
+  maxAttempts?: number; delayMs?: number; maxDelayMs?: number; probeTimeoutMs?: number;
+} = {}): typeof fetch {
+  const { maxAttempts = 20, delayMs = 1000, maxDelayMs = 5000, probeTimeoutMs = 5000 } = options;
+  return async (input, init) => {
+    for (let attempt = 0; ; attempt++) {
+      const probe = createClient({ url, authToken, fetch: (probeInput: Parameters<typeof fetch>[0], probeInit?: Parameters<typeof fetch>[1]) => {
+        const signal = AbortSignal.timeout(probeTimeoutMs);
+        return fetch(probeInput, { ...probeInit, signal: probeInit?.signal ? AbortSignal.any([probeInit.signal, signal]) : signal });
+      } });
+      try {
+        await probe.execute("SELECT 1");
+        break;
+      } catch (error) {
+        if (attempt + 1 >= maxAttempts) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(delayMs * 2 ** attempt, maxDelayMs)));
+      } finally {
+        probe.close();
+      }
+    }
+    return fetch(input, init);
+  };
+}
+
 export async function openSqliteStorage(dbPath: string, remote = resolveSqliteConfig()): Promise<SqliteStorageConnection> {
   const location = remote?.url ?? dbPath;
   if (/^(?:https?|libsql|wss?):\/\//i.test(location)) {
     const client = createClient({
       url: location,
       authToken: remote?.authToken,
+      fetch: /^(?:https?|libsql):\/\//i.test(location) ? createSqliteWakeFetch(location, remote?.authToken) : undefined,
       intMode: "number",
       readYourWrites: true,
     });
@@ -73,7 +100,9 @@ export function allRows<T extends Record<string, unknown>>(result: ResultSet): T
 export function enqueueClientWrite(client: SqliteClient, task: () => Promise<void>) {
   const current = clientWriteChains.get(client) ?? Promise.resolve();
   const next = current.then(task, task);
-  clientWriteChains.set(client, next.catch(() => {}));
+  clientWriteChains.set(client, next.catch(() => {
+    console.error("[SQLite] Queued write failed; the operation was not replayed to avoid duplicate counters.");
+  }));
   return next;
 }
 

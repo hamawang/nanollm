@@ -69,7 +69,7 @@ import { shouldIgnoreStreamReadError } from "../src/stream-errors.js";
 import { extractErrorCauses, formatErrorWithCauses } from "../src/error-details.js";
 import { SqliteUsageStore, UsageStore, formatLocalDay } from "../src/usage.js";
 import { normalizeUsage } from "../src/converters/shared.js";
-import { openSqliteStorage, resolveSqliteConfig } from "../src/sqlite.js";
+import { openSqliteStorage, resolveSqliteConfig, createSqliteWakeFetch } from "../src/sqlite.js";
 import { autoMigrateSqliteFileToTurso } from "../scripts/turso-migration.js";
 
 function createTestSqliteClient(path: string): Client {
@@ -4630,7 +4630,61 @@ await runAsync("remote sqlite sends optional bearer token and preserves database
   });
   assert.equal(requests[0].path, "/app/v2/pipeline");
   assert.equal(requests[0].token, undefined);
-  assert.equal(requests[1].token, "Bearer test-token");
+  assert.equal(requests[1].token, undefined);
+  assert.equal(requests[2].token, "Bearer test-token");
+  assert.equal(requests[3].token, "Bearer test-token");
+});
+
+await runAsync("remote sqlite retries wake probes but sends a counter increment only once", async () => {
+  let probes = 0;
+  let writes = 0;
+  let failWrite = false;
+  const seen: string[] = [];
+  await withHTTPServer((req, res) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const pipeline = JSON.parse(body);
+      const sql = pipeline.requests[0].stmt.sql as string;
+      seen.push(sql);
+      if (sql === "SELECT 1") {
+        probes++;
+        if (probes <= 2) { res.statusCode = 502; res.end("Waking up"); return; }
+      } else {
+        writes++;
+        if (failWrite) { res.statusCode = 502; res.end("Result unknown"); return; }
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ baton: null, base_url: null, results: [
+        { type: "ok", response: { type: "execute", result: { cols: [], rows: [], affected_row_count: 1, last_insert_rowid: null } } },
+        { type: "ok", response: { type: "close" } },
+      ] }));
+    });
+  }, async baseURL => {
+    const client = createClient({ url: baseURL, fetch: createSqliteWakeFetch(baseURL, undefined, { delayMs: 0, maxAttempts: 3 }) });
+    try {
+      await client.execute("UPDATE counters SET n = n + 1");
+      assert.deepEqual(seen, ["SELECT 1", "SELECT 1", "SELECT 1", "UPDATE counters SET n = n + 1"]);
+      assert.equal(writes, 1);
+      failWrite = true;
+      await assert.rejects(client.execute("UPDATE counters SET n = n + 1"));
+      assert.equal(writes, 2, "An uncertain write must not be retried");
+    } finally { client.close(); }
+  });
+});
+
+await runAsync("remote sqlite never sends the write when wake probes are exhausted", async () => {
+  let requests = 0;
+  await withHTTPServer((req, res) => {
+    requests++;
+    req.resume();
+    req.on("end", () => { res.statusCode = 503; res.end("Unavailable"); });
+  }, async baseURL => {
+    const client = createClient({ url: baseURL, fetch: createSqliteWakeFetch(baseURL, undefined, { delayMs: 0, maxAttempts: 3 }) });
+    try { await assert.rejects(client.execute("UPDATE counters SET n = n + 1")); }
+    finally { client.close(); }
+  });
+  assert.equal(requests, 3);
 });
 
 await runAsync("sqlite status store persists sparse buckets for a month while UI series stays at 6 hours", async () => {

@@ -13,6 +13,12 @@ restricted to `/.railway/quicsql/**`. quicSQL uses `rwc` to create a database on
 new volumes without replacing existing data. The existing production sqld
 service remains an uploaded build and is not bound to GitHub auto-deploys.
 
+The template enables `deploy.sleepApplication` for sqld and disables it for
+nanollm. This applies to new template deployments, not the existing live project.
+The gateway probes with `SELECT 1` before each HTTP database request, retrying
+only that probe; ambiguous write failures are not replayed. No idle polling is
+added. Cold-start savings still depend on actual quiet periods.
+
 `template.json` is a snapshot of Railway's serialized template configuration, not a file automatically applied during repository deployments. Edit the template in [Railway's template editor](https://railway.com/workspace/templates/13ec61fd-57bc-48cc-8950-a8b3d715b005) and apply the changes there. Keep this snapshot aligned with the saved template.
 
 `template-readme.md` contains the marketplace overview. After authenticating with the Railway CLI, update the overview with:
