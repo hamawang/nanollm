@@ -10,20 +10,6 @@
 - 3 可以配置兜底方案，设置兜底分组，如果调用的模型下游接口失败，并且在某个分组中，则会尝试分组其他模型。
 - 4 支持配置文件热更新和本地管理页：`models`、`fallback`、`server.ttfb_timeout`、`record.max_size` 保存后立即生效，`server.port` 和 `server.auth.token` 写回后需重启进程。
 
-## Railway 部署
-
-点击上方按钮，选择 Railway workspace / project 并确认部署即可。模板已预设源码仓库、Docker 构建、`/health` 健康检查、公网域名和挂载到 `/data` 的持久化卷，并为每次部署自动生成 `NANOLLM_AUTH_TOKEN`，无需手动填写变量或配置存储。
-
-部署完成后：
-
-1. 在服务的 **Variables** 中复制自动生成的 `NANOLLM_AUTH_TOKEN`，在 **Settings → Networking** 中找到公网域名。
-2. 打开 `https://<你的域名>/admin?token=<自动生成的 token>`，添加供应商和模型并保存。
-3. API 地址为 `https://<你的域名>/v1`，API key 使用同一个 token。
-
-模板包含 nanollm 和私网 quicSQL（服务名 `sqld`）两个服务，各自挂载持久化卷：配置和订阅登录凭据保存在 nanollm 的 `/data`，请求记录和统计保存在 sqld 的 `/var/lib/sqld`。`NANOLLM_SQLITE_URL` 自动引用 sqld 私网地址，无需创建 Turso 数据库。Node.js old-space 默认上限为 256 MiB。服务会自动使用 Railway 提供的 `PORT`。
-
-首次启动会生成 `/data/config.yaml`，初始模型列表为空。后续修改访问密钥需要同步更新配置中的 `server.auth.token` 并重启服务；仅修改环境变量不会覆盖已有配置文件。
-
 ## Configure
 
 Example:
