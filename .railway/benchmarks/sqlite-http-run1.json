@@ -1,0 +1,2137 @@
+{
+  "startedAt": "2026-10-01T17:06:54.727Z",
+  "client": "@libsql/client 0.17.4",
+  "limits": {
+    "memoryBytes": 536870912,
+    "cpu": 1,
+    "swap": false
+  },
+  "retention": {
+    "writes": 1000,
+    "keep": 100,
+    "payloadBytes": 262144
+  },
+  "results": [
+    {
+      "server": "sqld",
+      "image": "ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67",
+      "phases": [
+        {
+          "label": "empty",
+          "at": "2026-10-01T17:07:02.615Z",
+          "rss": 23154688,
+          "rssHighWater": 23154688,
+          "rssAnon": 4136960,
+          "rssFile": 19017728,
+          "threads": 7,
+          "container": 51957760,
+          "containerPeak": 51957760,
+          "anon": 6021120,
+          "fileCache": 42930176,
+          "inactiveFile": 39899136,
+          "kernel": 1085440,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 57344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 61440
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 139264
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 143360
+            }
+          ]
+        },
+        {
+          "label": "after_backup_import_and_verify",
+          "at": "2026-10-01T17:08:09.888Z",
+          "rss": 68423680,
+          "rssHighWater": 68423680,
+          "rssAnon": 49221632,
+          "rssFile": 19202048,
+          "threads": 8,
+          "container": 419680256,
+          "containerPeak": 419680256,
+          "anon": 51159040,
+          "fileCache": 355348480,
+          "inactiveFile": 345829376,
+          "kernel": 10481664,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 6004736
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 150884352
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 155316224
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 312254464
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 312258560
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 312336384
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 312340480
+            }
+          ]
+        },
+        {
+          "label": "after_large_reads_and_writes",
+          "at": "2026-10-01T17:08:26.277Z",
+          "rss": 117686272,
+          "rssHighWater": 117686272,
+          "rssAnon": 98467840,
+          "rssFile": 19218432,
+          "threads": 11,
+          "container": 536711168,
+          "containerPeak": 537321472,
+          "anon": 100352000,
+          "fileCache": 422789120,
+          "inactiveFile": 329486336,
+          "kernel": 13389824,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4304896
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact/0674ac2c-5530-4559-835d-3eb88737397e",
+              "allocatedBytes": 202633216
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 202637312
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 151183360
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 38715392
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp/atmp_9c113939-163c-412c-82f6-0cd9fe6a88a5",
+              "allocatedBytes": 59383808
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 59387904
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 456273920
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 456278016
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 456355840
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 456359936
+            }
+          ]
+        },
+        {
+          "label": "idle_30s",
+          "at": "2026-10-01T17:09:51.009Z",
+          "rss": 98471936,
+          "rssHighWater": 116584448,
+          "rssAnon": 79966208,
+          "rssFile": 18505728,
+          "threads": 11,
+          "container": 105267200,
+          "containerPeak": 537321472,
+          "anon": 81854464,
+          "fileCache": 20062208,
+          "inactiveFile": 4214784,
+          "kernel": 1347584,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4304896
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 151183360
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 38715392
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 346329088
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 346333184
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 346411008
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 346415104
+            }
+          ]
+        },
+        {
+          "label": "restart_and_full_verify",
+          "at": "2026-10-01T17:10:45.047Z",
+          "rss": 52469760,
+          "rssHighWater": 52469760,
+          "rssAnon": 33779712,
+          "rssFile": 18690048,
+          "threads": 7,
+          "container": 210132992,
+          "containerPeak": 210276352,
+          "anon": 35692544,
+          "fileCache": 170860544,
+          "inactiveFile": 34697216,
+          "kernel": 999424,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4304896
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 151183360
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 38715392
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 346329088
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 346333184
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 346411008
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 346415104
+            }
+          ]
+        },
+        {
+          "label": "retention_100",
+          "at": "2026-10-01T17:10:48.716Z",
+          "rss": 53362688,
+          "rssHighWater": 53362688,
+          "rssAnon": 34672640,
+          "rssFile": 18690048,
+          "threads": 8,
+          "container": 265166848,
+          "containerPeak": 265416704,
+          "anon": 36581376,
+          "fileCache": 223416320,
+          "inactiveFile": 87134208,
+          "kernel": 3072000,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4362240
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 176402432
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 65978368
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 398868480
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 398872576
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 398950400
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 398954496
+            }
+          ]
+        },
+        {
+          "label": "retention_200",
+          "at": "2026-10-01T17:10:52.351Z",
+          "rss": 53661696,
+          "rssHighWater": 53661696,
+          "rssAnon": 34971648,
+          "rssFile": 18690048,
+          "threads": 8,
+          "container": 296050688,
+          "containerPeak": 296050688,
+          "anon": 36872192,
+          "fileCache": 252977152,
+          "inactiveFile": 116604928,
+          "kernel": 3940352,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4362240
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 94220288
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 428429312
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 428433408
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 428511232
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 428515328
+            }
+          ]
+        },
+        {
+          "label": "retention_300",
+          "at": "2026-10-01T17:10:56.297Z",
+          "rss": 53665792,
+          "rssHighWater": 53665792,
+          "rssAnon": 34975744,
+          "rssFile": 18690048,
+          "threads": 8,
+          "container": 324792320,
+          "containerPeak": 325107712,
+          "anon": 36851712,
+          "fileCache": 281243648,
+          "inactiveFile": 119595008,
+          "kernel": 4767744,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4362240
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 122474496
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 456683520
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 456687616
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 456765440
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 456769536
+            }
+          ]
+        },
+        {
+          "label": "retention_400",
+          "at": "2026-10-01T17:10:59.897Z",
+          "rss": 53673984,
+          "rssHighWater": 53673984,
+          "rssAnon": 34983936,
+          "rssFile": 18690048,
+          "threads": 8,
+          "container": 351051776,
+          "containerPeak": 351051776,
+          "anon": 36872192,
+          "fileCache": 306257920,
+          "inactiveFile": 148004864,
+          "kernel": 5537792,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 1130496
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 150720512
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 481697792
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 481701888
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 481779712
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 481783808
+            }
+          ]
+        },
+        {
+          "label": "retention_500",
+          "at": "2026-10-01T17:11:03.540Z",
+          "rss": 53682176,
+          "rssHighWater": 53682176,
+          "rssAnon": 34992128,
+          "rssFile": 18690048,
+          "threads": 8,
+          "container": 383795200,
+          "containerPeak": 383795200,
+          "anon": 36900864,
+          "fileCache": 337620992,
+          "inactiveFile": 175026176,
+          "kernel": 6447104,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4243456
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 178970624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 513060864
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 513064960
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 513142784
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 513146880
+            }
+          ]
+        },
+        {
+          "label": "retention_600",
+          "at": "2026-10-01T17:11:07.488Z",
+          "rss": 54120448,
+          "rssHighWater": 54120448,
+          "rssAnon": 35430400,
+          "rssFile": 18690048,
+          "threads": 12,
+          "container": 440778752,
+          "containerPeak": 441061376,
+          "anon": 37347328,
+          "fileCache": 392556544,
+          "inactiveFile": 168054784,
+          "kernel": 8261632,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4243456
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact/27473e71-2fe5-4527-9511-594404005d5d",
+              "allocatedBytes": 200155136
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 200159232
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 7057408
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 152072192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp/atmp_0117f8aa-807c-4a42-95bc-c35812226a9e",
+              "allocatedBytes": 26693632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 26697728
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 567996416
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 568000512
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 568078336
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 568082432
+            }
+          ]
+        },
+        {
+          "label": "retention_700",
+          "at": "2026-10-01T17:11:11.496Z",
+          "rss": 54464512,
+          "rssHighWater": 54464512,
+          "rssAnon": 35774464,
+          "rssFile": 18690048,
+          "threads": 12,
+          "container": 503836672,
+          "containerPeak": 508899328,
+          "anon": 37658624,
+          "fileCache": 449208320,
+          "inactiveFile": 127139840,
+          "kernel": 9199616,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 1138688
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 35311616
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-49181-97760.snap",
+              "allocatedBytes": 31002624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 183074816
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 397299712
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 397303808
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 397381632
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 397385728
+            }
+          ]
+        },
+        {
+          "label": "retention_800",
+          "at": "2026-10-01T17:11:15.654Z",
+          "rss": 54517760,
+          "rssHighWater": 54517760,
+          "rssAnon": 35827712,
+          "rssFile": 18690048,
+          "threads": 12,
+          "container": 337002496,
+          "containerPeak": 508899328,
+          "anon": 37715968,
+          "fileCache": 291934208,
+          "inactiveFile": 129462272,
+          "kernel": 5263360,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4243456
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 63561728
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-49181-97760.snap",
+              "allocatedBytes": 31002624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 183074816
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 428654592
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 428658688
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 428736512
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 428740608
+            }
+          ]
+        },
+        {
+          "label": "retention_900",
+          "at": "2026-10-01T17:11:19.062Z",
+          "rss": 54599680,
+          "rssHighWater": 54599680,
+          "rssAnon": 35909632,
+          "rssFile": 18690048,
+          "threads": 12,
+          "container": 365965312,
+          "containerPeak": 508899328,
+          "anon": 37822464,
+          "fileCache": 320184320,
+          "inactiveFile": 157626368,
+          "kernel": 6107136,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 4243456
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 91811840
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-49181-97760.snap",
+              "allocatedBytes": 31002624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 183074816
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 456904704
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 456908800
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 456986624
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 456990720
+            }
+          ]
+        },
+        {
+          "label": "retention_1000",
+          "at": "2026-10-01T17:11:22.452Z",
+          "rss": 54706176,
+          "rssHighWater": 54706176,
+          "rssAnon": 36016128,
+          "rssFile": 18690048,
+          "threads": 12,
+          "container": 392593408,
+          "containerPeak": 508899328,
+          "anon": 37945344,
+          "fileCache": 345300992,
+          "inactiveFile": 186888192,
+          "kernel": 6852608,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 1122304
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 120049664
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-49181-97760.snap",
+              "allocatedBytes": 31002624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 183074816
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 482021376
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 482025472
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 482103296
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 482107392
+            }
+          ]
+        },
+        {
+          "label": "final_idle_30s",
+          "at": "2026-10-01T17:12:45.845Z",
+          "rss": 67887104,
+          "rssHighWater": 67887104,
+          "rssAnon": 49131520,
+          "rssFile": 18755584,
+          "threads": 9,
+          "container": 404746240,
+          "containerPeak": 508899328,
+          "anon": 51027968,
+          "fileCache": 345382912,
+          "inactiveFile": 168529920,
+          "kernel": 6791168,
+          "disk": [
+            {
+              "path": "/var/lib/sqld/iku.db/.version",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-wal",
+              "allocatedBytes": 1163264
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/to_compact",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/stats.json",
+              "allocatedBytes": 8192
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/data",
+              "allocatedBytes": 177721344
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/wallog",
+              "allocatedBytes": 120090624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-0-49180.snap",
+              "allocatedBytes": 152068096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots/6a1b9d10-5aa8-4b80-982d-c9a39e04beba-49181-97760.snap",
+              "allocatedBytes": 31002624
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/snapshots",
+              "allocatedBytes": 183074816
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/tmp",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default/.sentinel",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs/default",
+              "allocatedBytes": 482103296
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/dbs",
+              "allocatedBytes": 482107392
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore/data",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/var/lib/sqld/iku.db/metastore",
+              "allocatedBytes": 69632
+            },
+            {
+              "path": "/var/lib/sqld/iku.db",
+              "allocatedBytes": 482185216
+            },
+            {
+              "path": "/var/lib/sqld",
+              "allocatedBytes": 482189312
+            }
+          ]
+        }
+      ],
+      "compatibility": [
+        "executeMultiple",
+        "parameterized batch",
+        "64-bit integer",
+        "BLOB",
+        "Unicode",
+        "REAL",
+        "transaction commit",
+        "transaction rollback",
+        "failed batch atomicity"
+      ],
+      "timings": {
+        "importAndVerifyMs": 65517,
+        "largeRead20Ms": 8064,
+        "largeReadConcurrent4x5Ms": 3883,
+        "largeUpsert20Ms": 2632,
+        "retention1000Ms": 37369
+      },
+      "snapshotStillMatches": true,
+      "restartVerified": true,
+      "finalSnapshotMatches": true,
+      "success": true
+    },
+    {
+      "server": "quic",
+      "image": "nanollm-quicsql-bench:0.6.0",
+      "phases": [
+        {
+          "label": "empty",
+          "at": "2026-10-01T17:12:51.024Z",
+          "rss": 15941632,
+          "rssHighWater": 15941632,
+          "rssAnon": 1994752,
+          "rssFile": 13946880,
+          "threads": 7,
+          "container": 27938816,
+          "containerPeak": 28405760,
+          "anon": 3854336,
+          "fileCache": 21286912,
+          "inactiveFile": 19120128,
+          "kernel": 872448,
+          "disk": [
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 4096
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 8192
+            }
+          ]
+        },
+        {
+          "label": "after_backup_import_and_verify",
+          "at": "2026-10-01T17:13:41.055Z",
+          "rss": 48627712,
+          "rssHighWater": 68087808,
+          "rssAnon": 33869824,
+          "rssFile": 14757888,
+          "threads": 8,
+          "container": 224038912,
+          "containerPeak": 242794496,
+          "anon": 35741696,
+          "fileCache": 180510720,
+          "inactiveFile": 171110400,
+          "kernel": 5758976,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 8306688
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 150880256
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 159223808
+            }
+          ]
+        },
+        {
+          "label": "after_large_reads_and_writes",
+          "at": "2026-10-01T17:13:49.011Z",
+          "rss": 49483776,
+          "rssHighWater": 136253440,
+          "rssAnon": 34594816,
+          "rssFile": 14888960,
+          "threads": 8,
+          "container": 226074624,
+          "containerPeak": 311578624,
+          "anon": 36474880,
+          "fileCache": 180809728,
+          "inactiveFile": 167055360,
+          "kernel": 5840896,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 8306688
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 151179264
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 159522816
+            }
+          ]
+        },
+        {
+          "label": "idle_30s",
+          "at": "2026-10-01T17:14:55.523Z",
+          "rss": 34177024,
+          "rssHighWater": 136253440,
+          "rssAnon": 19288064,
+          "rssFile": 14888960,
+          "threads": 9,
+          "container": 210538496,
+          "containerPeak": 311578624,
+          "anon": 21131264,
+          "fileCache": 180809728,
+          "inactiveFile": 20328448,
+          "kernel": 5832704,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 8306688
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 151179264
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 159522816
+            }
+          ]
+        },
+        {
+          "label": "restart_and_full_verify",
+          "at": "2026-10-01T17:15:32.888Z",
+          "rss": 41193472,
+          "rssHighWater": 60403712,
+          "rssAnon": 26501120,
+          "rssFile": 14692352,
+          "threads": 9,
+          "container": 31293440,
+          "containerPeak": 48857088,
+          "anon": 28385280,
+          "fileCache": 32768,
+          "inactiveFile": 36864,
+          "kernel": 942080,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 0
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 151179264
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 151216128
+            }
+          ]
+        },
+        {
+          "label": "retention_100",
+          "at": "2026-10-01T17:15:36.434Z",
+          "rss": 28647424,
+          "rssHighWater": 60403712,
+          "rssAnon": 13889536,
+          "rssFile": 14757888,
+          "threads": 9,
+          "container": 49299456,
+          "containerPeak": 49774592,
+          "anon": 15769600,
+          "fileCache": 29630464,
+          "inactiveFile": 25337856,
+          "kernel": 1822720,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 176398336
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 180813824
+            }
+          ]
+        },
+        {
+          "label": "retention_200",
+          "at": "2026-10-01T17:15:39.976Z",
+          "rss": 27328512,
+          "rssHighWater": 60403712,
+          "rssAnon": 12570624,
+          "rssFile": 14757888,
+          "threads": 9,
+          "container": 49192960,
+          "containerPeak": 50778112,
+          "anon": 14426112,
+          "fileCache": 30949376,
+          "inactiveFile": 26529792,
+          "kernel": 1871872,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_300",
+          "at": "2026-10-01T17:15:43.571Z",
+          "rss": 28934144,
+          "rssHighWater": 60403712,
+          "rssAnon": 14176256,
+          "rssFile": 14757888,
+          "threads": 9,
+          "container": 51564544,
+          "containerPeak": 51712000,
+          "anon": 16027648,
+          "fileCache": 30949376,
+          "inactiveFile": 1253376,
+          "kernel": 1875968,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_400",
+          "at": "2026-10-01T17:15:47.081Z",
+          "rss": 27176960,
+          "rssHighWater": 60403712,
+          "rssAnon": 12419072,
+          "rssFile": 14757888,
+          "threads": 9,
+          "container": 49676288,
+          "containerPeak": 51712000,
+          "anon": 14299136,
+          "fileCache": 30949376,
+          "inactiveFile": 307200,
+          "kernel": 1863680,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_500",
+          "at": "2026-10-01T17:15:50.574Z",
+          "rss": 28413952,
+          "rssHighWater": 60403712,
+          "rssAnon": 13590528,
+          "rssFile": 14823424,
+          "threads": 9,
+          "container": 50737152,
+          "containerPeak": 51712000,
+          "anon": 15441920,
+          "fileCache": 30949376,
+          "inactiveFile": 151552,
+          "kernel": 1867776,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_600",
+          "at": "2026-10-01T17:15:54.107Z",
+          "rss": 28585984,
+          "rssHighWater": 60403712,
+          "rssAnon": 13762560,
+          "rssFile": 14823424,
+          "threads": 9,
+          "container": 50282496,
+          "containerPeak": 51712000,
+          "anon": 15609856,
+          "fileCache": 30949376,
+          "inactiveFile": 94208,
+          "kernel": 1871872,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_700",
+          "at": "2026-10-01T17:15:57.703Z",
+          "rss": 28553216,
+          "rssHighWater": 60403712,
+          "rssAnon": 13729792,
+          "rssFile": 14823424,
+          "threads": 9,
+          "container": 50597888,
+          "containerPeak": 51712000,
+          "anon": 15605760,
+          "fileCache": 30949376,
+          "inactiveFile": 73728,
+          "kernel": 1859584,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_800",
+          "at": "2026-10-01T17:16:01.112Z",
+          "rss": 27418624,
+          "rssHighWater": 60403712,
+          "rssAnon": 12595200,
+          "rssFile": 14823424,
+          "threads": 9,
+          "container": 49528832,
+          "containerPeak": 51712000,
+          "anon": 14442496,
+          "fileCache": 30949376,
+          "inactiveFile": 65536,
+          "kernel": 1871872,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_900",
+          "at": "2026-10-01T17:16:04.514Z",
+          "rss": 29331456,
+          "rssHighWater": 60403712,
+          "rssAnon": 14442496,
+          "rssFile": 14888960,
+          "threads": 9,
+          "container": 51245056,
+          "containerPeak": 51712000,
+          "anon": 16318464,
+          "fileCache": 30949376,
+          "inactiveFile": 65536,
+          "kernel": 1859584,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "retention_1000",
+          "at": "2026-10-01T17:16:07.992Z",
+          "rss": 29507584,
+          "rssHighWater": 60403712,
+          "rssAnon": 14618624,
+          "rssFile": 14888960,
+          "threads": 9,
+          "container": 51400704,
+          "containerPeak": 51712000,
+          "anon": 16498688,
+          "fileCache": 30949376,
+          "inactiveFile": 65536,
+          "kernel": 1867776,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        },
+        {
+          "label": "final_idle_30s",
+          "at": "2026-10-01T17:17:14.553Z",
+          "rss": 46198784,
+          "rssHighWater": 73584640,
+          "rssAnon": 31309824,
+          "rssFile": 14888960,
+          "threads": 9,
+          "container": 68669440,
+          "containerPeak": 97013760,
+          "anon": 33185792,
+          "fileCache": 30949376,
+          "inactiveFile": 61440,
+          "kernel": 1867776,
+          "disk": [
+            {
+              "path": "/data/app.db-shm",
+              "allocatedBytes": 32768
+            },
+            {
+              "path": "/data/app.db-wal",
+              "allocatedBytes": 4378624
+            },
+            {
+              "path": "/data/app.db",
+              "allocatedBytes": 177717248
+            },
+            {
+              "path": "/data",
+              "allocatedBytes": 182132736
+            }
+          ]
+        }
+      ],
+      "compatibility": [
+        "executeMultiple",
+        "parameterized batch",
+        "64-bit integer",
+        "BLOB",
+        "Unicode",
+        "REAL",
+        "transaction commit",
+        "transaction rollback",
+        "failed batch atomicity"
+      ],
+      "timings": {
+        "importAndVerifyMs": 48270,
+        "largeRead20Ms": 1909,
+        "largeReadConcurrent4x5Ms": 1181,
+        "largeUpsert20Ms": 3168,
+        "retention1000Ms": 35079
+      },
+      "snapshotStillMatches": true,
+      "restartVerified": true,
+      "finalSnapshotMatches": true,
+      "success": true
+    }
+  ],
+  "sourceSha256": "7053626c539efabbdd154d85af768b4e11c1d677262a2ae747a1e8ab19fc6c5d",
+  "source": {
+    "tables": [
+      {
+        "name": "daily_token_summary",
+        "rows": 2,
+        "sha256": "6f2fecab933ae425551d2aa549c02f19dea456fa640f445b30ed41f65bd77498"
+      },
+      {
+        "name": "record_image_refs",
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record_images",
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "records",
+        "rows": 100,
+        "sha256": "4c90848bae0710ecc186c3e6673d18771b2cd20756f76c21e2667a3509a04be8"
+      },
+      {
+        "name": "status_buckets",
+        "rows": 1506,
+        "sha256": "94d0e4af13a38ea0559fa40c60ba0edbdcf10bcc609f0ff277582c3d025cb724"
+      },
+      {
+        "name": "usage_days",
+        "rows": 595,
+        "sha256": "d85177122162924b0dcaa5bf7028445d6eb0c5cc36b93513e97604c9cd6be27c"
+      }
+    ],
+    "explicitIndexCount": 6
+  },
+  "completedAt": "2026-10-01T17:17:15.544Z",
+  "versions": {
+    "sqld": "0.24.33",
+    "quic": "0.6.0"
+  }
+}

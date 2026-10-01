@@ -59,7 +59,6 @@ import type { NormalizedRequest, NormalizedResponse } from "./src/converters/sha
 import { shouldIgnoreStreamReadError } from "./src/stream-errors.js";
 import { handleServerStartupError } from "./src/startup-error.js";
 import { openSqliteStorage } from "./src/sqlite.js";
-import { autoMigrateSqliteFileToTurso, resolveTursoAutoMigrationConfig } from "./src/turso-migration.js";
 import { buildAdminConfigForm, buildAdminConfigFormFromEffectiveConfig, buildYamlTextFromAdminForm, type AdminConfigForm } from "./src/admin-config-form.js";
 import { extractErrorCauses, formatErrorWithCauses } from "./src/error-details.js";
 import { bootstrapSubscriptionProviders, configureSubscriptionStorage, fetchSubscriptionModels, fetchSubscriptionUsage, getCachedSubscriptionCredential, pollDeviceLogin, resetSubscriptionUsage, startDeviceLogin } from "./src/openai-subscription.js";
@@ -124,14 +123,6 @@ configureClaudeSubscriptionStorage(configPath);
 const storageMode = resolveStorageMode(startupArgs);
 const sqlitePath = join(homedir(), ".nanollm", "nanollm.sqlite3");
 const sqliteStorage = storageMode === "sqlite" ? await openSqliteStorage(sqlitePath) : undefined;
-if (sqliteStorage?.driver === "turso") {
-  const autoMigration = resolveTursoAutoMigrationConfig();
-  if (autoMigration) {
-    await autoMigrateSqliteFileToTurso(sqliteStorage.client, autoMigration, {
-      logger: (message) => console.log(`[TURSO MIGRATE] ${message}`),
-    });
-  }
-}
 const configManager = new ConfigManager(configPath);
 const startupSnapshot = configManager.getActiveSnapshot();
 bootstrapSubscriptionProviders(startupSnapshot.effectiveConfig.providers.filter((provider) => provider.provider === "openai-subscription"));

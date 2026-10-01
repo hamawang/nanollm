@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createClient, type Client } from "@libsql/client";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { migrateSqliteFileToTurso } from "../src/turso-migration.js";
+import { migrateSqliteFileToTurso } from "./turso-migration.js";
 
 type CliOptions = {
   from?: string;
@@ -36,10 +36,10 @@ function parseArgs(argv: string[]): CliOptions {
 }
 
 function resolveRemoteConfig(options: CliOptions) {
-  const url = options.url ?? process.env.NANOLLM_TURSO_DATABASE_URL ?? process.env.TURSO_DATABASE_URL;
-  const authToken = options.token ?? process.env.NANOLLM_TURSO_AUTH_TOKEN ?? process.env.TURSO_AUTH_TOKEN;
+  const url = options.url ?? process.env.NANOLLM_SQLITE_URL;
+  const authToken = options.token ?? process.env.NANOLLM_SQLITE_AUTH_TOKEN;
   if (!url) {
-    throw new Error("Missing Turso database URL. Pass --url or set NANOLLM_TURSO_DATABASE_URL / TURSO_DATABASE_URL.");
+    throw new Error("Missing SQLite database URL. Pass --url or set NANOLLM_SQLITE_URL.");
   }
   return { url, authToken };
 }

@@ -1,0 +1,74 @@
+{
+  "buckets": {},
+  "services": {
+    "7070b7c0-dfe9-4fa8-a177-cad77e1242e2": {
+      "build": {
+        "watchPatterns": [
+          "/.railway/quicsql/**"
+        ]
+      },
+      "deploy": {
+        "healthcheckPath": "/_health",
+        "region": "us-west2",
+        "restartPolicyMaxRetries": 10,
+        "restartPolicyType": "ON_FAILURE"
+      },
+      "name": "sqld",
+      "source": {
+        "branch": "dev",
+        "repo": "sunwu51/nanollm",
+        "rootDirectory": "/.railway/quicsql"
+      },
+      "volumeMounts": {
+        "7070b7c0-dfe9-4fa8-a177-cad77e1242e2": {
+          "mountPath": "/var/lib/sqld"
+        }
+      }
+    },
+    "bb36505b-955b-45ef-af1d-d0fef939adbf": {
+      "deploy": {
+        "healthcheckPath": "/health",
+        "region": "us-west2",
+        "restartPolicyMaxRetries": 10,
+        "restartPolicyType": "ALWAYS",
+        "startCommand": ""
+      },
+      "icon": null,
+      "name": "nanollm",
+      "networking": {
+        "serviceDomains": {
+          "<hasDomain>": {}
+        }
+      },
+      "source": {
+        "branch": "dev",
+        "repo": "sunwu51/nanollm",
+        "rootDirectory": null
+      },
+      "variables": {
+        "NANOLLM_AUTH_TOKEN": {
+          "defaultValue": "${{secret(32)}}",
+          "isOptional": false
+        },
+        "NANOLLM_MAX_OLD_SPACE_SIZE": {
+          "defaultValue": "256",
+          "description": "",
+          "isOptional": false
+        },
+        "NANOLLM_SQLITE_URL": {
+          "defaultValue": "http://${{sqld.RAILWAY_PRIVATE_DOMAIN}}:8080/app/",
+          "description": "Private quicSQL database; keep the /app/ suffix.",
+          "isOptional": false
+        },
+        "NANOLLM_STORAGE": {
+          "defaultValue": "sqlite"
+        }
+      },
+      "volumeMounts": {
+        "bb36505b-955b-45ef-af1d-d0fef939adbf": {
+          "mountPath": "/data"
+        }
+      }
+    }
+  }
+}

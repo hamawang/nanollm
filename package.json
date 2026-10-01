@@ -23,8 +23,9 @@
     "start:railway": "bash scripts/start-railway.sh",
     "dev": "tsx --watch server.ts",
     "migrate:turso": "tsx scripts/migrate-sqlite-to-turso.ts",
+    "migrate:storage": "npm run build && node dist/scripts/storage-migration-cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.build.json && node .test-dist/tests/run.js && node --test .test-dist/tests/subscription-proxy.js",
+    "test": "tsc -p tsconfig.build.json && node .test-dist/tests/run.js && node --test .test-dist/tests/subscription-proxy.js .test-dist/tests/storage-migration.js",
     "converter:test": "tsc -p tsconfig.build.json && node .test-dist/src/converters/test.js"
   },
   "pkg": {

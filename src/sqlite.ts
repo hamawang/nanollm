@@ -1,50 +1,52 @@
 import { createClient, type Client, type ResultSet } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type SqliteClient = Client;
 const clientWriteChains = new WeakMap<SqliteClient, Promise<void>>();
 
-export interface TursoConfig {
+export interface RemoteSqliteConfig {
   url: string;
   authToken?: string;
 }
 
 export interface SqliteStorageConnection {
   client: SqliteClient;
-  driver: "local" | "turso";
+  driver: "local" | "remote";
   location: string;
 }
 
-export function resolveTursoConfig(env: NodeJS.ProcessEnv = process.env): TursoConfig | undefined {
-  const url = env.NANOLLM_TURSO_DATABASE_URL ?? env.TURSO_DATABASE_URL;
-  const authToken = env.NANOLLM_TURSO_AUTH_TOKEN ?? env.TURSO_AUTH_TOKEN;
+export function resolveSqliteConfig(env: NodeJS.ProcessEnv = process.env): RemoteSqliteConfig | undefined {
+  const url = env.NANOLLM_SQLITE_URL;
+  const authToken = env.NANOLLM_SQLITE_AUTH_TOKEN;
   if (!url && !authToken) return undefined;
   if (!url) {
-    throw new Error("Turso auth token is set but database URL is missing. Set NANOLLM_TURSO_DATABASE_URL or TURSO_DATABASE_URL.");
+    throw new Error("SQLite auth token is set but database URL is missing. Set NANOLLM_SQLITE_URL.");
   }
   return { url, authToken };
 }
 
-export async function openSqliteStorage(dbPath: string, turso = resolveTursoConfig()): Promise<SqliteStorageConnection> {
-  if (turso) {
+export async function openSqliteStorage(dbPath: string, remote = resolveSqliteConfig()): Promise<SqliteStorageConnection> {
+  const location = remote?.url ?? dbPath;
+  if (/^(?:https?|libsql|wss?):\/\//i.test(location)) {
     const client = createClient({
-      url: turso.url,
-      authToken: turso.authToken,
+      url: location,
+      authToken: remote?.authToken,
       intMode: "number",
       readYourWrites: true,
     });
     return {
       client,
-      driver: "turso",
-      location: turso.url,
+      driver: "remote",
+      location,
     };
   }
 
-  mkdirSync(dirname(dbPath), { recursive: true });
+  const localPath = location.startsWith("file:") ? fileURLToPath(location) : location;
+  mkdirSync(dirname(localPath), { recursive: true });
   const client = createClient({
-    url: pathToFileURL(dbPath).href,
+    url: pathToFileURL(localPath).href,
     intMode: "number",
     timeout: 5000,
   });
@@ -56,7 +58,7 @@ export async function openSqliteStorage(dbPath: string, turso = resolveTursoConf
   return {
     client,
     driver: "local",
-    location: dbPath,
+    location: localPath,
   };
 }
 

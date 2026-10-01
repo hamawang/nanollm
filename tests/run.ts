@@ -69,8 +69,8 @@ import { shouldIgnoreStreamReadError } from "../src/stream-errors.js";
 import { extractErrorCauses, formatErrorWithCauses } from "../src/error-details.js";
 import { SqliteUsageStore, UsageStore, formatLocalDay } from "../src/usage.js";
 import { normalizeUsage } from "../src/converters/shared.js";
-import { openSqliteStorage } from "../src/sqlite.js";
-import { autoMigrateSqliteFileToTurso } from "../src/turso-migration.js";
+import { openSqliteStorage, resolveSqliteConfig } from "../src/sqlite.js";
+import { autoMigrateSqliteFileToTurso } from "../scripts/turso-migration.js";
 
 function createTestSqliteClient(path: string): Client {
   return createClient({ url: `file:${path}`, intMode: "number", timeout: 5000 });
@@ -4598,6 +4598,39 @@ await runAsync("status store lists only model names with recent buckets", async 
   store.recordAttempt("alpha", now);
 
   assert.deepEqual(await store.listModelNames(now), ["alpha", "beta"]);
+});
+
+run("sqlite configuration uses generic URL and optional token", () => {
+  assert.equal(resolveSqliteConfig({}), undefined);
+  assert.deepEqual(resolveSqliteConfig({ NANOLLM_SQLITE_URL: "http://sqld:8080/app/" }), { url: "http://sqld:8080/app/", authToken: undefined });
+  assert.throws(() => resolveSqliteConfig({ NANOLLM_SQLITE_AUTH_TOKEN: "test-token" }), /NANOLLM_SQLITE_URL/);
+  assert.equal(resolveSqliteConfig({ NANOLLM_TURSO_DATABASE_URL: "https://old.example.com" }), undefined);
+});
+
+await runAsync("remote sqlite sends optional bearer token and preserves database URL path", async () => {
+  const requests: { path: string | undefined; token: string | undefined }[] = [];
+  await withHTTPServer((req, res) => {
+    requests.push({ path: req.url, token: req.headers.authorization });
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ baton: null, base_url: null, results: [
+        { type: "ok", response: { type: "execute", result: { cols: [{ name: "value", decltype: null }], rows: [[{ type: "integer", value: "1" }]], affected_row_count: 0, last_insert_rowid: null } } },
+        { type: "ok", response: { type: "close" } },
+      ] }));
+    });
+  }, async (baseURL) => {
+    for (const authToken of [undefined, "test-token"]) {
+      const storage = await openSqliteStorage("unused.sqlite3", { url: `${baseURL}/app/`, authToken });
+      try {
+        assert.equal(storage.driver, "remote");
+        assert.equal((await storage.client.execute("SELECT 1 AS value")).rows[0].value, 1);
+      } finally { storage.client.close(); }
+    }
+  });
+  assert.equal(requests[0].path, "/app/v2/pipeline");
+  assert.equal(requests[0].token, undefined);
+  assert.equal(requests[1].token, "Bearer test-token");
 });
 
 await runAsync("sqlite status store persists sparse buckets for a month while UI series stays at 6 hours", async () => {
