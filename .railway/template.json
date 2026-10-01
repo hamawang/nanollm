@@ -11,7 +11,8 @@
         "healthcheckPath": "/_health",
         "region": "us-west2",
         "restartPolicyMaxRetries": 10,
-        "restartPolicyType": "ON_FAILURE"
+        "restartPolicyType": "ON_FAILURE",
+        "sleepApplication": true
       },
       "name": "sqld",
       "source": {
@@ -31,6 +32,7 @@
         "region": "us-west2",
         "restartPolicyMaxRetries": 10,
         "restartPolicyType": "ALWAYS",
+        "sleepApplication": false,
         "startCommand": ""
       },
       "icon": null,
