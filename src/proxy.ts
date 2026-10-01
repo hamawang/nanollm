@@ -20,19 +20,21 @@ import {
   setRecordedAttemptResponseMeta,
 } from "./record.js";
 import { runInNewContext } from "node:vm";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { extractErrorCauses } from "./error-details.js";
 import { getClientIp, getClientRequestHeaders } from "./request-context.js";
 import { getCachedSubscriptionCredential, ensureSubscriptionCredential, SUBSCRIPTION_URL } from "./openai-subscription.js";
 import { CLAUDE_CODE_DEFAULT_HEADERS, CODEX_CLI_ORIGINATOR, CODEX_CLI_USER_AGENT } from "./subscription-client-compat.js";
 import { addClaudeBillingBlock } from "./claude-billing.js";
+import { applyClaudeSubscriptionSessionIdentity, hasClaudeMetadataUserId, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "./claude-subscription-body.js";
 import {
   CLAUDE_CODE_BETA,
   CLAUDE_MESSAGES_URL,
   CLAUDE_OAUTH_BETA,
   ensureClaudeSubscriptionCredential,
   getCachedClaudeSubscriptionCredential,
+  getOrCreateClaudeSubscriptionDeviceId,
 } from "./claude-subscription.js";
 
 export interface UpstreamRequestOptions {
@@ -123,7 +125,10 @@ function denormalizeRequest(config: ModelConfig, normalized: NormalizedRequest):
     case "openai-responses":
       return denormalizeToOpenAIResponsesRequest(normalized);
     case "anthropic":
-      return denormalizeToAnthropicRequest(normalized, { ignoreInvalidHistory: config.ignore_invalid_history ?? true });
+      return denormalizeToAnthropicRequest(normalized, {
+        ignoreInvalidHistory: config.ignore_invalid_history ?? true,
+        defaultMaxOutputTokens: config.claude_subscription_provider ? CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS : undefined,
+      });
   }
 }
 
@@ -247,6 +252,105 @@ function stripOpenAIResponsesUnstoredItemIds(config: ModelConfig, body: unknown)
     return withoutId;
   });
   return changed ? { ...body, input } : body;
+}
+
+/** Fields the ChatGPT Codex backend (chatgpt.com/backend-api/codex/responses) rejects. */
+export const CODEX_SUBSCRIPTION_UNSUPPORTED_FIELDS = [
+  "max_output_tokens",
+  "max_completion_tokens",
+  "max_tokens",
+  "temperature",
+  "top_p",
+  "frequency_penalty",
+  "presence_penalty",
+  "user",
+  "metadata",
+  "safety_identifier",
+  "prompt_cache_retention",
+  "stream_options",
+  "truncation",
+  "stop_sequences",
+] as const;
+
+/** Codex subscription requests must omit unsupported fields and always use store=false, stream=true. */
+export function sanitizeCodexSubscriptionBody(body: unknown): unknown {
+  if (!isPlainObject(body)) return body;
+  const sanitized: Record<string, unknown> = { ...body };
+  for (const field of CODEX_SUBSCRIPTION_UNSUPPORTED_FIELDS) delete sanitized[field];
+  sanitized.store = false;
+  sanitized.stream = true;
+  return sanitized;
+}
+
+const CODEX_TERMINAL_RESPONSE_EVENTS = new Set(["response.completed", "response.incomplete", "response.done"]);
+
+/** Collapse a Codex Responses SSE stream into the equivalent non-stream Responses JSON body. */
+export async function aggregateCodexResponsesStream(body: ReadableStream<Uint8Array>): Promise<Record<string, unknown>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const parser = new SSEParser();
+  const outputItems = new Map<number, unknown>();
+  let finalResponse: Record<string, unknown> | undefined;
+  let rawText = "";
+
+  const fail = (message: string, upstream: string): never => {
+    const err = new Error(message) as Error & { status: number; upstream: string };
+    err.status = 502;
+    err.upstream = upstream;
+    throw err;
+  };
+
+  const handle = (data: string) => {
+    let event: unknown;
+    try { event = JSON.parse(data); } catch { return; }
+    if (!isPlainObject(event)) return;
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type === "response.output_item.done" && typeof event.output_index === "number") {
+      outputItems.set(event.output_index, event.item);
+    } else if (CODEX_TERMINAL_RESPONSE_EVENTS.has(type) && isPlainObject(event.response)) {
+      finalResponse = event.response;
+    } else if (type === "response.failed") {
+      const error = isPlainObject(event.response) ? event.response.error : undefined;
+      fail(`Upstream response failed: ${JSON.stringify(error ?? event)}`, data);
+    } else if (type === "error") {
+      fail(`Upstream stream error: ${JSON.stringify(event.error ?? event)}`, data);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      rawText += text;
+      for (const event of parser.push(text)) handle(event.data);
+    }
+    const tail = decoder.decode();
+    rawText += tail;
+    for (const event of parser.push(tail)) handle(event.data);
+    for (const event of parser.flush()) handle(event.data);
+  } catch (error) {
+    reader.cancel(error).catch(() => {});
+    throw error;
+  }
+
+  if (!finalResponse) fail("Upstream SSE stream ended without a terminal response event", rawText);
+  const result: Record<string, unknown> = { ...finalResponse! };
+  // Terminal output may be empty or partial. Keep its final item payloads and
+  // insert missing streamed items at their original output indices.
+  if (outputItems.size > 0) {
+    const output: unknown[] = Array.isArray(result.output) ? [...result.output] : [];
+    for (const [index, item] of [...outputItems.entries()].sort(([a], [b]) => a - b)) {
+      const alreadyPresent = output.some((candidate) =>
+        isPlainObject(item) && typeof item.id === "string"
+          ? isPlainObject(candidate) && candidate.id === item.id
+          : JSON.stringify(candidate) === JSON.stringify(item),
+      );
+      if (!alreadyPresent) output.splice(index, 0, item);
+    }
+    result.output = output;
+  }
+  return result;
 }
 
 function preparePassthroughBody(config: ModelConfig, rawBody: Record<string, unknown>, stream: boolean): unknown {
@@ -426,11 +530,6 @@ export function applyClaudeSubscriptionHeaders(headers: Record<string, string>, 
   }
   if (stream && !getHeader(headers, "x-stainless-helper-method")) setHeader(headers, "x-stainless-helper-method", "stream");
   if (!getHeader(headers, "x-client-request-id")) setHeader(headers, "x-client-request-id", randomUUID());
-  if (!getHeader(headers, "x-claude-code-session-id")) {
-    const ip = getClientIp() || "unknown";
-    const day = new Date().toISOString().slice(0, 10);
-    setHeader(headers, "x-claude-code-session-id", `${day}-${createHash("sha256").update(ip).digest("hex").slice(0, 24)}`);
-  }
 }
 
 function applyCodexSubscriptionIdentityHeaders(headers: Record<string, string>, incoming = getClientRequestHeaders()): void {
@@ -485,20 +584,54 @@ async function upstreamFetch(
   body: unknown,
   stream: boolean,
   options?: UpstreamRequestOptions,
+  promptCacheKey?: string,
 ): Promise<{ response: Response; timing: UpstreamTiming }> {
   if (config.subscription_provider) await ensureSubscriptionCredential(config.subscription_provider);
   if (config.claude_subscription_provider) await ensureClaudeSubscriptionCredential(config.claude_subscription_provider);
-  const headers = getForwardHeaders(config, body, options);
-  const upstreamBody = config.claude_subscription_provider ? addClaudeBillingBlock(body, getHeader(headers, "user-agent")) : body;
+  // The Codex backend only accepts streaming, unstored requests; non-stream callers aggregate the SSE.
+  let requestBody = config.subscription_provider ? sanitizeCodexSubscriptionBody(body) : body;
+  const upstreamStream = config.subscription_provider ? true : stream;
+  const headers = getForwardHeaders(config, requestBody, options);
+  if (config.claude_subscription_provider && isPlainObject(requestBody)) {
+    requestBody = applyClaudeSubscriptionSessionIdentity(requestBody, headers, {
+      provider: config.claude_subscription_provider,
+      deviceId: hasClaudeMetadataUserId(requestBody) ? "" : getOrCreateClaudeSubscriptionDeviceId(config.claude_subscription_provider),
+      clientHeaders: getClientRequestHeaders(),
+      clientIp: getClientIp(),
+      promptCacheKey,
+    });
+  }
+  const upstreamBody = config.claude_subscription_provider
+    ? sanitizeClaudeSubscriptionBody(addClaudeBillingBlock(requestBody, getHeader(headers, "user-agent")))
+    : requestBody;
   return upstreamFetchToUrl(
     config,
     getUpstreamURL(config),
     JSON.stringify(upstreamBody),
-    stream,
+    upstreamStream,
     headers,
     options,
     upstreamBody,
   );
+}
+
+/** Read a non-stream upstream response as JSON, aggregating the forced Codex subscription SSE stream. */
+async function readNonStreamUpstreamJson(
+  config: ModelConfig,
+  response: Response,
+  options?: UpstreamRequestOptions,
+): Promise<unknown> {
+  const attemptIndex = options?.attemptIndex ?? 0;
+  if (config.subscription_provider) {
+    if (!response.body) throw new Error("Upstream returned no streaming body");
+    const aggregated = await aggregateCodexResponsesStream(response.body);
+    setRecordedAttemptResponseBody({ index: attemptIndex, body: JSON.stringify(aggregated) });
+    return applyModelResponseExpression(config, aggregated, response.headers);
+  }
+  const text = await response.text();
+  setRecordedAttemptResponseBody({ index: attemptIndex, body: text });
+  const parsed = JSON.parse(text);
+  return isJsonContentType(response.headers) ? applyModelResponseExpression(config, parsed, response.headers) : parsed;
 }
 
 async function upstreamFetchToUrl(
@@ -858,10 +991,7 @@ export async function passthroughRequest(
 ): Promise<{ json: unknown; timing: UpstreamTiming; usage?: NormalizedUsage }> {
   const body = preparePassthroughBody(config, rawBody, false);
   const { response, timing } = await upstreamFetch(config, body, false, options);
-  const text = await response.text();
-  setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
-  const parsed = JSON.parse(text);
-  const json = isJsonContentType(response.headers) ? applyModelResponseExpression(config, parsed, response.headers) : parsed;
+  const json = await readNonStreamUpstreamJson(config, response, options);
   const usage = normalizeUsage((json as Record<string, unknown>)?.usage as Record<string, unknown> | undefined);
   return { json, timing, usage };
 }
@@ -890,11 +1020,9 @@ export async function forwardRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, body, false, options);
-  const text = await response.text();
-  setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
-  const parsed = JSON.parse(text);
-  const json = isJsonContentType(response.headers) ? applyModelResponseExpression(config, parsed, response.headers) : parsed;
+  const { response, timing } = await upstreamFetch(config, body, false, options,
+    normalized.sourceFormat === "openai-chat" || normalized.sourceFormat === "openai-responses" ? normalized.promptCacheKey : undefined);
+  const json = await readNonStreamUpstreamJson(config, response, options);
   const normalizedResponse = normalizeUpstreamResponse(config.provider, json);
   return { normalizedResponse, timing, usage: normalizedResponse.usage };
 }
@@ -909,7 +1037,8 @@ export async function forwardStreamRequest(
   normalized.image = config.image ?? true;
 
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
-  const { response, timing } = await upstreamFetch(config, body, true, options);
+  const { response, timing } = await upstreamFetch(config, body, true, options,
+    normalized.sourceFormat === "openai-chat" || normalized.sourceFormat === "openai-responses" ? normalized.promptCacheKey : undefined);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0, config, headers: response.headers });
   return { body: validatedBody, upstreamFormat: config.provider, timing };

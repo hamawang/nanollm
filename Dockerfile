@@ -15,6 +15,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json tsconfig.dist.json cli.ts server.ts ./
 COPY src ./src
+COPY scripts ./scripts
 RUN npm run build \
     && npm prune --omit=dev
 

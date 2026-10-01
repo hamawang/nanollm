@@ -2,6 +2,8 @@
 
 一个类似`litellm`的llm模型代理服务，主打一个轻量和本地化，适合个人本地聚合多个模型的场景。
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/nanollm)
+
 支持的功能：
 - 1 可以配置`chat/completions`(下面称chat)、`responses`、`messages`三种文本接口，以及 OpenAI 图片`images/generations`和`images/edits`接口（暂不支持google接口）的模型供应商，并且同时对外暴露这些接口，带`/v1`前缀。
 - 2 可以配置修改请求中的`headers`和`body`，传自定义数据，其中`body`支持深度合并。
@@ -451,25 +453,26 @@ npx nanollm --config /path/to/config.yaml --storage sqlite
 
 不传 `--storage` 时默认使用 `memory`，行为与旧版本一致。
 
-当 `--storage sqlite` 且未配置 Turso 时，会继续使用本地 SQLite 文件，路径固定为 `~/.nanollm/nanollm.sqlite3`。现有本地数据库文件可以直接复用，不需要迁移格式。
+当 `--storage sqlite` 且未配置远程 SQLite URL 时，会继续使用本地 SQLite 文件，路径固定为 `~/.nanollm/nanollm.sqlite3`。现有本地数据库文件可以直接复用，不需要迁移格式。
 
-如果希望把 SQLite 存储切到 Turso，可以配置以下环境变量：
+如果希望把 SQLite 存储切到远程 libSQL/quicSQL 服务，可以配置以下环境变量：
 
 ```bash
-export NANOLLM_TURSO_DATABASE_URL="libsql://xxx-xxx.aws-ap-northeast-1.turso.io"
-export NANOLLM_TURSO_AUTH_TOKEN="your-token"
+export NANOLLM_SQLITE_URL="https://your-sqlite.example.com/app/"
+export NANOLLM_SQLITE_AUTH_TOKEN="your-token" # 无鉴权的内网服务可省略
 npx nanollm --config /path/to/config.yaml --storage sqlite
 ```
 
-也兼容 Turso 默认变量名 `TURSO_DATABASE_URL` 和 `TURSO_AUTH_TOKEN`。只要 URL 配好了，`--storage sqlite` 就会优先走 Turso；未配置时自动回退到本地文件模式。
+URL 可以是 HTTP(S) 的 libSQL/quicSQL 服务地址，也可以不配置而使用本地文件。配置 `NANOLLM_SQLITE_URL` 后，`--storage sqlite` 会通过 HTTP 连接远程 SQLite；需要鉴权时额外设置 `NANOLLM_SQLITE_AUTH_TOKEN`。
 
-如果希望在第一次切到 Turso 时自动把本地 SQLite 文件导入过去，可以额外设置：
+本程序不再在正常启动流程中执行远程数据库自动迁移。需要迁移已有本地文件时，请先使用仓库中的一次性迁移脚本完成复制和校验，再配置远程 SQLite URL。
 
-```bash
-export NANOLLM_TURSO_AUTO_MIGRATE_FROM="$HOME/.nanollm/nanollm.sqlite3"
-```
-
-这个开关只在当前实际连接的是 Turso 时生效。服务启动时会先执行一次导入，再继续启动；同一个源路径的自动迁移完成后会在目标库里记完成标记，后续重启不会重复导入。
+HTTP(S)/libSQL 连接每次发送正式数据库请求前，先用独立连接执行只读 `SELECT 1` 探测。
+探测失败时按 1、2、4、5 秒（随后保持 5 秒）等待重试，最多 20 次，每次探测超时为 5 秒；
+探测成功后立即发送正式请求。批量 SQL 整批探测一次，保持事务和批处理语义。
+正式请求失败不会自动重发，避免已提交但响应丢失时重复累加统计；探测耗尽或正式写入失败会记录错误，
+这不是保证最终送达的持久化任务队列。探测仅在有数据库操作时触发，不会通过后台心跳阻止休眠。
+Railway 模板为 sqld 开启 Serverless，nanollm 保持常驻；查看记录和统计时也可能等待数据库唤醒。
 
 如果当前目录就有 `config.yaml`，也可以直接运行：
 ```bash
@@ -502,13 +505,13 @@ npx nanollm
 
 默认情况下，上述数据都只存在内存中，进程结束即消失。使用 `--storage sqlite` 启动后，`/status` 会在 SQLite 中保留最近 1 个月的稀疏 5 分钟统计 bucket（页面仍只展示最近 6 小时），`/record` 会持久化最近 `record.max_size` 条请求记录。
 
-### Turso Migration
+### Remote SQLite Migration
 
-如果你之前在 Railway 上通过 volume 保存了 `nanollm.sqlite3`，推荐迁移流程是：
+如果你之前在 Railway 上通过 volume 保存了 `nanollm.sqlite3`，可以使用一次性迁移脚本复制到兼容的远程 SQLite 服务：
 
-1. 先在 Turso 创建一个新的空数据库，并拿到 URL / token。
+1. 准备一个新的远程 SQLite 数据库，并拿到 URL / token（无鉴权内网服务不需要 token）。
 2. 从 Railway volume 导出现有的 SQLite 文件。
-3. 运行迁移脚本，把本地 SQLite 文件同步到 Turso：
+3. 运行迁移脚本，把本地 SQLite 文件同步到远程服务：
 
 ```bash
 npm run migrate:turso -- --from /path/to/nanollm.sqlite3
@@ -523,12 +526,4 @@ npm run migrate:turso -- \
   --token your-token
 ```
 
-脚本会复制当前库里的表结构、数据和索引，适合把现有 Railway volume 数据一次性迁入新的 Turso 库。完成后，只需要在 Railway 配置上面的 Turso 环境变量，并继续使用 `--storage sqlite` 启动即可，不再依赖 volume。
-
-如果你更想在服务第一次连上 Turso 时自动导入，也可以在 Railway 额外配置：
-
-```bash
-NANOLLM_TURSO_AUTO_MIGRATE_FROM=/data/.nanollm/nanollm.sqlite3
-```
-
-建议首次切换完成后移除这个环境变量，虽然代码会根据完成标记跳过重复导入，但运维上更清晰。
+脚本会复制当前库里的表结构、数据和索引，适合一次性迁入兼容的远程 SQLite 服务。完成后配置 `NANOLLM_SQLITE_URL` 和可选的 `NANOLLM_SQLITE_AUTH_TOKEN`，继续使用 `--storage sqlite` 启动即可。

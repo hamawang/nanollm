@@ -4,13 +4,75 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { oauthPost, resolveOAuthTransportPath } from "../src/oauth-transport.js";
-import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, ensureClaudeSubscriptionCredential, getCachedClaudeSubscriptionCredential, parseClaudeCallback, startClaudeLogin } from "../src/claude-subscription.js";
+import { bootstrapClaudeSubscriptionProviders, completeClaudeLogin, configureClaudeSubscriptionStorage, ensureClaudeSubscriptionCredential, getCachedClaudeSubscriptionCredential, getOrCreateClaudeSubscriptionDeviceId, parseClaudeCallback, startClaudeLogin } from "../src/claude-subscription.js";
 import { parseConfigText } from "../src/config.js";
 import { applyClaudeSubscriptionHeaders, getUpstreamURL } from "../src/proxy.js";
+import { applyClaudeSubscriptionSessionIdentity } from "../src/claude-subscription-body.js";
 import { runWithRequestId, setClientIp, setClientRequestHeaders } from "../src/request-context.js";
 import { bootstrapSubscriptionProviders, configureSubscriptionStorage, startDeviceLogin, pollDeviceLogin, ensureSubscriptionCredential, getCachedSubscriptionCredential } from "../src/openai-subscription.js";
+
+test("Claude device ID migrates legacy credentials and survives a fresh process", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nanollm-claude-device-"));
+  const provider = "device-persistence-test";
+  const configPath = join(dir, "config.yaml");
+  const storage = join(dir, "claude-subscription");
+  mkdirSync(storage);
+  const path = join(storage, "11111111-1111-4111-8111-111111111111.json");
+  const credential = { providerName: provider, accessToken: "test-access", refreshToken: "test-refresh", expiresAt: Date.now() + 3600000, accountUuid: "test-account" };
+  writeFileSync(path, JSON.stringify(credential));
+  try {
+    configureClaudeSubscriptionStorage(configPath);
+    const deviceId = getOrCreateClaudeSubscriptionDeviceId(provider);
+    assert.match(deviceId, /^[a-f0-9]{64}$/);
+    assert.equal(getOrCreateClaudeSubscriptionDeviceId(provider), deviceId);
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { ...credential, deviceId });
+    const moduleUrl = new URL("../src/claude-subscription.js", import.meta.url).href;
+    const script = `import { configureClaudeSubscriptionStorage, getOrCreateClaudeSubscriptionDeviceId } from ${JSON.stringify(moduleUrl)};
+      configureClaudeSubscriptionStorage(${JSON.stringify(configPath)});
+      process.stdout.write(getOrCreateClaudeSubscriptionDeviceId(${JSON.stringify(provider)}));`;
+    assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }).trim(), deviceId);
+    assert.equal(readdirSync(storage).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Claude startup backfills missing device IDs independently and preserves existing IDs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nanollm-claude-startup-device-"));
+  const storage = join(dir, "claude-subscription");
+  mkdirSync(storage);
+  const existingDeviceId = "031f29c6266b4724365990d8ce2455828eccb6b00b6de0431cdb7cb76ff8c45b";
+  const providers = ["startup-device-a", "startup-device-b", "startup-device-existing"].map((name) => ({
+    name, provider: "claude-subscription" as const, base_url: "", api_key: "",
+  }));
+  const paths = providers.map((provider, index) => {
+    const path = join(storage, `${index + 2}0000000-1111-4111-8111-111111111111.json`);
+    writeFileSync(path, JSON.stringify({
+      providerName: provider.name, accessToken: "test-access", refreshToken: "test-refresh", expiresAt: Date.now() + 3600000,
+      ...(index === 2 ? { deviceId: existingDeviceId } : {}),
+    }));
+    return path;
+  });
+  const existingFile = readFileSync(paths[2]!, "utf8");
+  try {
+    configureClaudeSubscriptionStorage(join(dir, "config.yaml"));
+    bootstrapClaudeSubscriptionProviders(providers);
+    const ids = paths.map((path) => JSON.parse(readFileSync(path, "utf8")).deviceId);
+    assert.ok(ids.every((id) => /^[a-f0-9]{64}$/.test(id)));
+    assert.notEqual(ids[0], ids[1]);
+    assert.equal(ids[2], existingDeviceId);
+    assert.equal(readFileSync(paths[2]!, "utf8"), existingFile);
+    bootstrapClaudeSubscriptionProviders(providers);
+    assert.deepEqual(paths.map((path) => JSON.parse(readFileSync(path, "utf8")).deviceId), ids);
+    assert.equal(readdirSync(storage).length, 3);
+  } finally {
+    bootstrapClaudeSubscriptionProviders([]);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("OAuth transport fails on proxy rejection without bypassing it", async () => {
   const targets: string[] = [];
@@ -119,21 +181,31 @@ test("claude subscription headers merge betas and default Claude Code identity",
   assert.equal(fromClaudeCode["User-Agent"], "claude-cli/9.9.9 (external, cli)");
 });
 
-test("claude subscription generates a daily stable session id from caller IP only when absent", () => {
+test("claude subscription uses one stable session ID in headers and metadata", () => {
   const clientHeaders = new Headers({ "x-forwarded-for": "203.0.113.4" });
   runWithRequestId("claude-session-default", () => {
     setClientRequestHeaders(clientHeaders);
     setClientIp("203.0.113.4");
     const first: Record<string, string> = {};
     applyClaudeSubscriptionHeaders(first);
+    const body = { messages: [{ role: "user", content: "hello" }] };
+    const options = { provider: "claude", deviceId: "a".repeat(64), clientHeaders, clientIp: "203.0.113.4" };
+    const firstBody = applyClaudeSubscriptionSessionIdentity(body, first, options) as any;
     const second: Record<string, string> = {};
     applyClaudeSubscriptionHeaders(second);
+    applyClaudeSubscriptionSessionIdentity({ messages: [...body.messages, { role: "assistant", content: "answer" }] }, second, options);
     assert.equal(first["x-claude-code-session-id"], second["x-claude-code-session-id"]);
-    assert.match(first["x-claude-code-session-id"], /^\d{4}-\d{2}-\d{2}-[a-f0-9]{24}$/);
+    assert.match(first["x-claude-code-session-id"]!, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+    assert.equal(JSON.parse(firstBody.metadata.user_id).session_id, first["x-claude-code-session-id"]);
 
     const explicit: Record<string, string> = { "x-claude-code-session-id": "caller-session" };
     applyClaudeSubscriptionHeaders(explicit);
+    const explicitBody = applyClaudeSubscriptionSessionIdentity(body, explicit, options) as any;
     assert.equal(explicit["x-claude-code-session-id"], "caller-session");
+    assert.equal(JSON.parse(explicitBody.metadata.user_id).session_id, "caller-session");
+    const other: Record<string, string> = {};
+    applyClaudeSubscriptionSessionIdentity({ messages: [{ role: "user", content: "different chat" }] }, other, options);
+    assert.notEqual(first["x-claude-code-session-id"], other["x-claude-code-session-id"]);
   });
 });
 

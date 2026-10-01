@@ -1,0 +1,13 @@
+server:
+  data_dir: /var/lib/sqld/quicsql
+listeners:
+  - name: private-http
+    transport: h1
+    address: '[::]:8080'
+    auth: [none]
+databases:
+  - name: app
+    backend: file
+    path: app.db
+    mode: rwc
+    pragmas_preset: recommended

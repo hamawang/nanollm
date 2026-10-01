@@ -22,7 +22,8 @@ import {
   responsesResponseToAnthropicMessage,
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
-import { normalizeOpenAIResponsesRequest } from "../src/converters/requests.js";
+import { denormalizeToAnthropicRequest, normalizeOpenAIChatRequest, normalizeOpenAIResponsesRequest } from "../src/converters/requests.js";
+import { addClaudeSubscriptionUserId, applyClaudeSubscriptionSessionIdentity, CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS, sanitizeClaudeSubscriptionBody } from "../src/claude-subscription-body.js";
 import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, parseConfigText, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
@@ -36,7 +37,7 @@ import { extractUpstreamModelIds, fetchUpstreamModels } from "../src/upstream-mo
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
-import { applyClaudeSubscriptionHeaders, applyCodexSubscriptionHeaders, forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
+import { aggregateCodexResponsesStream, applyClaudeSubscriptionHeaders, applyCodexSubscriptionHeaders, forwardRequest, sanitizeCodexSubscriptionBody, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { cacheResponseItems, resolveItemReferences, shouldCacheResponseItems } from "../src/response-cache.js";
 import { buildNonStreamResponse, RESPONSE_COMPRESSION_THRESHOLD_BYTES } from "../src/response-compression.js";
 import { renderRecordPage } from "../src/record-page.js";
@@ -68,8 +69,8 @@ import { shouldIgnoreStreamReadError } from "../src/stream-errors.js";
 import { extractErrorCauses, formatErrorWithCauses } from "../src/error-details.js";
 import { SqliteUsageStore, UsageStore, formatLocalDay } from "../src/usage.js";
 import { normalizeUsage } from "../src/converters/shared.js";
-import { openSqliteStorage } from "../src/sqlite.js";
-import { autoMigrateSqliteFileToTurso } from "../src/turso-migration.js";
+import { openSqliteStorage, resolveSqliteConfig, createSqliteWakeFetch } from "../src/sqlite.js";
+import { autoMigrateSqliteFileToTurso } from "../scripts/turso-migration.js";
 
 function createTestSqliteClient(path: string): Client {
   return createClient({ url: `file:${path}`, intMode: "number", timeout: 5000 });
@@ -2557,7 +2558,7 @@ run("anthropic thinking budget 4000 maps to responses medium reasoning.effort", 
   assert.deepEqual((responses as any).reasoning, { effort: "medium" });
 });
 
-run("anthropic max effort maps to chat xhigh reasoning with downgrade log", () => {
+run("anthropic max effort is preserved in chat reasoning without downgrade log", () => {
   let chat: any;
   const warnings = captureConsoleWarn(() => {
     chat = anthropicMessageRequestToChatParams({
@@ -2569,12 +2570,12 @@ run("anthropic max effort maps to chat xhigh reasoning with downgrade log", () =
     } as any);
   });
 
-  assert.equal(chat.reasoning_effort, "xhigh");
-  assert.deepEqual(chat.reasoning, { effort: "xhigh" });
-  assert.deepEqual(warnings, ['[CONVERTER] Mapping reasoning effort "max" to "xhigh" for OpenAI Chat; OpenAI does not support "max".']);
+  assert.equal(chat.reasoning_effort, "max");
+  assert.deepEqual(chat.reasoning, { effort: "max" });
+  assert.deepEqual(warnings, []);
 });
 
-run("anthropic max effort maps to responses xhigh reasoning with downgrade log", () => {
+run("anthropic max effort is preserved in responses reasoning without downgrade log", () => {
   let responses: any;
   const warnings = captureConsoleWarn(() => {
     responses = anthropicMessageRequestToResponsesRequest({
@@ -2586,8 +2587,66 @@ run("anthropic max effort maps to responses xhigh reasoning with downgrade log",
     } as any);
   });
 
-  assert.deepEqual(responses.reasoning, { effort: "xhigh" });
-  assert.deepEqual(warnings, ['[CONVERTER] Mapping reasoning effort "max" to "xhigh" for OpenAI Responses; OpenAI does not support "max".']);
+  assert.deepEqual(responses.reasoning, { effort: "max" });
+  assert.deepEqual(warnings, []);
+});
+
+run("responses effort preserves existing levels and maps ultra to max across protocols", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+    const request = { model: "test-model", input: "hi", reasoning: { effort } };
+    const snapshot = structuredClone(request);
+    const expected = effort === "ultra" ? "max" : effort;
+    assert.equal(normalizeOpenAIResponsesRequest(request as any).reasoningEffort, expected);
+    const chat = responsesRequestToChatParams(request as any) as any;
+    assert.equal(chat.reasoning_effort, expected);
+    assert.deepEqual(chat.reasoning, { effort: expected });
+    const anthropic = responsesRequestToAnthropicMessageRequest(request as any);
+    assert.deepEqual(anthropic.thinking, { type: "adaptive" });
+    assert.equal(anthropic.output_config?.effort, expected);
+    assert.deepEqual(request, snapshot);
+  }
+  assert.equal(normalizeOpenAIResponsesRequest({ model: "test-model", input: "hi" } as any).reasoningEffort, null);
+});
+
+run("chat effort preserves five common levels and maps ultra to max from either field", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+    for (const fields of [{ reasoning_effort: effort }, { reasoning: { effort } }]) {
+      const request = { model: "test-model", messages: [{ role: "user", content: "hi" }], ...fields };
+      const snapshot = structuredClone(request);
+      const expected = effort === "ultra" ? "max" : effort;
+      assert.equal(normalizeOpenAIChatRequest(request as any).reasoningEffort, expected);
+      assert.deepEqual(chatParamsToResponsesRequest(request as any).reasoning, { effort: expected });
+      const anthropic = chatParamsToAnthropicMessageRequest(request as any);
+      assert.deepEqual(anthropic.thinking, { type: "adaptive" });
+      assert.equal(anthropic.output_config?.effort, expected);
+      assert.deepEqual(request, snapshot);
+    }
+  }
+});
+
+run("chat effort retains top-level precedence and legacy none/minimal values", () => {
+  const base = { model: "test-model", messages: [{ role: "user", content: "hi" }] };
+  for (const effort of ["none", "minimal", "low", "ultra"]) {
+    const request = { ...base, reasoning_effort: effort, reasoning: { effort: "high" } };
+    const expected = effort === "ultra" ? "max" : effort;
+    assert.equal(normalizeOpenAIChatRequest(request as any).reasoningEffort, expected);
+    assert.deepEqual(chatParamsToResponsesRequest(request as any).reasoning, { effort: expected });
+  }
+  assert.equal(normalizeOpenAIChatRequest(base as any).reasoningEffort, null);
+  assert.equal(normalizeOpenAIChatRequest({ ...base, reasoning_effort: null, reasoning: { effort: "ultra" } } as any).reasoningEffort, "max");
+});
+
+run("anthropic five common effort levels are preserved in both OpenAI protocols", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+    const request = {
+      model: "test-model", max_tokens: 12000, messages: [{ role: "user", content: "hi" }],
+      thinking: { type: "adaptive" }, output_config: { effort },
+    };
+    const chat = anthropicMessageRequestToChatParams(request as any) as any;
+    assert.equal(chat.reasoning_effort, effort);
+    assert.deepEqual(chat.reasoning, { effort });
+    assert.deepEqual(anthropicMessageRequestToResponsesRequest(request as any).reasoning, { effort });
+  }
 });
 
 run("chat medium reasoning maps to anthropic adaptive thinking", () => {
@@ -4023,6 +4082,239 @@ run("codex subscription headers fall back to prompt_cache_key and add routing hi
   assert.deepEqual(invalidModel, {});
 });
 
+run("claude subscription user_id preserves existing identity and fills JSON metadata without mutation", () => {
+  const options = { provider: "claude", deviceId: "a".repeat(64) };
+  const original = { messages: [{ role: "user", content: "hello" }], metadata: { other: "kept" } };
+  const result = addClaudeSubscriptionUserId(original, options) as any;
+  const identity = JSON.parse(result.metadata.user_id);
+  assert.equal(identity.device_id, options.deviceId);
+  assert.equal(identity.account_uuid, "");
+  assert.match(identity.session_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.equal(result.metadata.other, "kept");
+  assert.deepEqual(original.metadata, { other: "kept" });
+  const existing = { ...original, metadata: { user_id: "client-defined-user" } };
+  assert.equal(addClaudeSubscriptionUserId(existing, options), existing);
+});
+
+run("claude subscription session identity prioritizes original headers over prompt cache keys", () => {
+  const body = { messages: [{ role: "user", content: "hello" }] };
+  const base = { provider: "claude", deviceId: "b".repeat(64) };
+  const session = (options: Parameters<typeof addClaudeSubscriptionUserId>[1]) =>
+    JSON.parse((addClaudeSubscriptionUserId(body, options) as any).metadata.user_id).session_id;
+  for (const name of ["x-claude-code-session-id", "session_id", "thread_id", "conversation_id"]) {
+    const clientHeaders = new Headers({ [name]: "client-session" });
+    assert.equal(session({ ...base, clientHeaders, promptCacheKey: "key1" }), session({ ...base, clientHeaders, promptCacheKey: "key2" }));
+    assert.notEqual(session({ ...base, clientHeaders }), session({ ...base, clientHeaders: new Headers({ [name]: "other-session" }) }));
+  }
+  assert.equal(session({ ...base, clientHeaders: new Headers({ "x-claude-code-session-id": "cc", session_id: "other" }) }),
+    session({ ...base, clientHeaders: new Headers({ "x-claude-code-session-id": "cc" }) }));
+  assert.notEqual(session({ ...base, promptCacheKey: "key1" }), session({ ...base, promptCacheKey: "key2" }));
+  assert.notEqual(session({ ...base, promptCacheKey: "key1" }), session({ ...base, provider: "other", promptCacheKey: "key1" }));
+});
+
+run("claude subscription synchronizes final session header with structured metadata", () => {
+  const base = { provider: "claude", deviceId: "a".repeat(64), promptCacheKey: "key" };
+  const existingIdentity = { device_id: "existing-device", account_uuid: "existing-account", session_id: "existing-session", extra: "kept" };
+  const body = { messages: [{ role: "user", content: "hello" }], metadata: { user_id: JSON.stringify(existingIdentity) } };
+  const headers: Record<string, string> = {};
+  assert.equal(applyClaudeSubscriptionSessionIdentity(body, headers, base), body);
+  assert.equal(headers["x-claude-code-session-id"], existingIdentity.session_id);
+  const overridden: Record<string, string> = { "X-Claude-Code-Session-Id": "configured-session" };
+  const updated = applyClaudeSubscriptionSessionIdentity(body, overridden, { ...base, clientHeaders: new Headers({ "x-claude-code-session-id": "client-session" }) }) as any;
+  assert.deepEqual(JSON.parse(updated.metadata.user_id), { ...existingIdentity, session_id: "configured-session" });
+  assert.deepEqual(overridden, { "x-claude-code-session-id": "configured-session" });
+  assert.equal(JSON.parse(body.metadata.user_id).session_id, "existing-session");
+  const generated: Record<string, string> = {};
+  const generatedBody = applyClaudeSubscriptionSessionIdentity({ messages: body.messages }, generated, base) as any;
+  assert.equal(JSON.parse(generatedBody.metadata.user_id).session_id, generated["x-claude-code-session-id"]);
+  const other: Record<string, string> = {};
+  applyClaudeSubscriptionSessionIdentity({ messages: body.messages }, other, { ...base, promptCacheKey: "other-key" });
+  assert.notEqual(generated["x-claude-code-session-id"], other["x-claude-code-session-id"]);
+  const legacy = { metadata: { user_id: `user_${"a".repeat(64)}_account__session_11111111-1111-4111-8111-111111111111` } };
+  const legacyHeaders: Record<string, string> = { "x-claude-code-session-id": "session-$&" };
+  const legacyBody = applyClaudeSubscriptionSessionIdentity(legacy, legacyHeaders, base) as any;
+  assert.equal(legacyBody.metadata.user_id, `user_${"a".repeat(64)}_account__session_session-$&`);
+});
+
+run("claude subscription session fallback stays stable as conversation grows", () => {
+  const options = { provider: "claude", deviceId: "c".repeat(64), clientIp: "127.0.0.1", clientHeaders: new Headers({ "user-agent": "client" }) };
+  const first = { role: "user", content: [{ type: "text", text: "hello" }] };
+  const session = (messages: unknown[], extra = {}) => JSON.parse((addClaudeSubscriptionUserId({ messages }, { ...options, ...extra }) as any).metadata.user_id).session_id;
+  assert.equal(session([first]), session([first, { role: "assistant", content: "answer" }, { role: "user", content: "next" }]));
+  assert.notEqual(session([first]), session([{ role: "user", content: "new chat" }]));
+  assert.notEqual(session([first]), session([first], { clientIp: "127.0.0.2" }));
+});
+
+run("OpenAI conversion retains explicit prompt cache keys for Claude subscription identity", () => {
+  const requests = [
+    normalizeOpenAIResponsesRequest({ model: "claude", input: "hello", prompt_cache_key: "conversation-key" } as any),
+    normalizeOpenAIChatRequest({ model: "claude", messages: [{ role: "user", content: "hello" }], prompt_cache_key: "conversation-key" } as any),
+  ];
+  const identities = requests.map((request) => JSON.parse((addClaudeSubscriptionUserId(denormalizeToAnthropicRequest(request), {
+    provider: "claude", deviceId: "d".repeat(64), promptCacheKey: request.promptCacheKey,
+  }) as any).metadata.user_id));
+  assert.equal(identities[0].session_id, identities[1].session_id);
+  assert.equal(requests[0].promptCacheKey, "conversation-key");
+  assert.equal(requests[1].promptCacheKey, "conversation-key");
+});
+
+run("claude subscription fills missing defaults and removes tool_choice without tools", () => {
+  const original = { model: "claude-sonnet-4-6", messages: [], tool_choice: { type: "auto" } };
+  assert.deepEqual(sanitizeClaudeSubscriptionBody(original), {
+    model: original.model, messages: [], tools: [], max_tokens: 128000, temperature: 1,
+  });
+  assert.deepEqual(original, { model: "claude-sonnet-4-6", messages: [], tool_choice: { type: "auto" } });
+  const explicit = {
+    model: original.model, messages: [], tools: [{ name: "lookup", input_schema: { type: "object" } }],
+    tool_choice: { type: "tool", name: "lookup" }, max_tokens: 1024, temperature: 0,
+    metadata: { user_id: "original-user" }, context_management: { edits: [] }, system: "You are my assistant.", stream: false,
+  };
+  assert.deepEqual(sanitizeClaudeSubscriptionBody(explicit), explicit);
+  for (const tools of [[], null]) {
+    const result = sanitizeClaudeSubscriptionBody({ ...explicit, tools }) as Record<string, unknown>;
+    assert.equal("tool_choice" in result, false);
+  }
+});
+
+run("claude subscription temperature default excludes Opus 5.5 and preserves explicit values", () => {
+  for (const model of ["claude-opus-5-5", "anthropic/claude-opus-5.5", "models/claude-opus-5-5-thinking", "us.anthropic.claude-opus-5-5-20260901"]) {
+    const result = sanitizeClaudeSubscriptionBody({ model, messages: [] }) as Record<string, unknown>;
+    assert.equal("temperature" in result, false, model);
+    assert.equal((sanitizeClaudeSubscriptionBody({ model, temperature: 0.4 }) as any).temperature, 0.4);
+  }
+  assert.equal((sanitizeClaudeSubscriptionBody({ model: "claude-opus-4-6" }) as any).temperature, 1);
+  assert.equal((sanitizeClaudeSubscriptionBody({ model: "claude-sonnet-5-5" }) as any).temperature, 1);
+});
+
+run("claude subscription conversion uses 128k default without changing regular API or explicit limits", () => {
+  const request = normalizeOpenAIResponsesRequest({ model: "claude-sonnet-4-6", input: "hello" } as any);
+  assert.equal(denormalizeToAnthropicRequest(request).max_tokens, 32000);
+  assert.equal(denormalizeToAnthropicRequest(request, { defaultMaxOutputTokens: CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS }).max_tokens, 128000);
+  request.maxOutputTokens = 2048;
+  assert.equal(denormalizeToAnthropicRequest(request, { defaultMaxOutputTokens: CLAUDE_SUBSCRIPTION_DEFAULT_MAX_TOKENS }).max_tokens, 2048);
+});
+
+run("claude subscription cache cleanup removes illegal thinking breakpoints without mutating input", () => {
+  const cc = { type: "ephemeral", ttl: "1h" };
+  const original = {
+    system: [{ type: "thinking", thinking: "thought", cache_control: cc }, { type: "text", text: "system", cache_control: cc }],
+    messages: [{ role: "assistant", content: [{ type: "thinking", thinking: "thought", signature: "sig", cache_control: cc }, { type: "text", text: "answer", cache_control: cc }] }],
+    tools: [{ name: "lookup", cache_control: cc }], cache_control: cc,
+  };
+  const snapshot = structuredClone(original);
+  const result = sanitizeClaudeSubscriptionBody(original) as any;
+  assert.equal("cache_control" in result.system[0], false);
+  assert.equal("cache_control" in result.messages[0].content[0], false);
+  assert.equal(result.messages[0].content[0].signature, "sig");
+  assert.deepEqual(result.system[1].cache_control, cc);
+  assert.deepEqual(result.messages[0].content[1].cache_control, cc);
+  assert.deepEqual(result.tools[0].cache_control, cc);
+  assert.deepEqual(result.cache_control, cc);
+  assert.deepEqual(original, snapshot);
+});
+
+run("claude subscription cache limit removes tools last-to-first then oldest messages", () => {
+  const block = (text: string) => ({ type: "text", text, cache_control: { type: "ephemeral" } });
+  const original = {
+    system: [block("s0"), block("s1")],
+    messages: [{ role: "user", content: [block("m0"), block("m1"), block("m2")] }],
+    tools: [{ name: "t0", cache_control: { type: "ephemeral" } }, { name: "t1", cache_control: { type: "ephemeral" } }],
+  };
+  const result = sanitizeClaudeSubscriptionBody(original) as any;
+  assert.deepEqual(result.system, original.system);
+  assert.equal("cache_control" in result.tools[0], false);
+  assert.equal("cache_control" in result.tools[1], false);
+  assert.equal("cache_control" in result.messages[0].content[0], false);
+  assert.deepEqual(result.messages[0].content.slice(1), original.messages[0].content.slice(1));
+  const toolsOnly = sanitizeClaudeSubscriptionBody({ tools: Array.from({ length: 5 }, (_, i) => ({ name: `t${i}`, cache_control: {} })) }) as any;
+  assert.equal("cache_control" in toolsOnly.tools[4], false);
+  assert.ok(toolsOnly.tools.slice(0, 4).every((tool: any) => "cache_control" in tool));
+  const systemOnly = sanitizeClaudeSubscriptionBody({ system: Array.from({ length: 5 }, (_, i) => block(`s${i}`)) }) as any;
+  assert.equal("cache_control" in systemOnly.system[4], false);
+  assert.ok(systemOnly.system.slice(0, 4).every((item: any) => "cache_control" in item));
+});
+
+run("codex subscription body drops unsupported fields and forces store=false, stream=true", () => {
+  const original = {
+    model: "gpt-5.5",
+    input: "hi",
+    max_output_tokens: 1,
+    max_completion_tokens: 1,
+    max_tokens: 1,
+    temperature: 0.2,
+    top_p: 0.9,
+    frequency_penalty: 0,
+    presence_penalty: 0,
+    user: "u",
+    metadata: { a: 1 },
+    safety_identifier: "s",
+    prompt_cache_retention: "24h",
+    stream_options: { include_usage: true },
+    truncation: "auto",
+    stop_sequences: ["x"],
+    store: true,
+    stream: false,
+    reasoning: { effort: "high" },
+  };
+  const sanitized = sanitizeCodexSubscriptionBody(original) as Record<string, unknown>;
+  assert.deepEqual(sanitized, { model: "gpt-5.5", input: "hi", store: false, stream: true, reasoning: { effort: "high" } });
+  assert.equal(original.temperature, 0.2);
+});
+
+await runAsync("codex subscription SSE is aggregated into a full Responses body", async () => {
+  const item = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] };
+  const sse = [
+    { type: "response.created", response: { id: "resp_1", model: "gpt-5.5", status: "in_progress", output: [] } },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { id: "resp_1", object: "response", model: "gpt-5.5", status: "completed", output: [], usage: { input_tokens: 2, output_tokens: 1 } } },
+  ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const stream = new Response(sse).body!;
+  const aggregated = await aggregateCodexResponsesStream(stream);
+  assert.equal(aggregated.id, "resp_1");
+  assert.equal(aggregated.status, "completed");
+  assert.deepEqual(aggregated.output, [item]);
+  assert.deepEqual(aggregated.usage, { input_tokens: 2, output_tokens: 1 });
+
+  const failed = `data: ${JSON.stringify({ type: "response.failed", response: { error: { message: "boom" } } })}\n\n`;
+  await assert.rejects(aggregateCodexResponsesStream(new Response(failed).body!), /boom/);
+});
+
+await runAsync("codex subscription SSE rejects EOF without a terminal response event", async () => {
+  const events = [
+    { type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } },
+    { type: "response.output_text.delta", output_index: 0, delta: "partial answer" },
+  ];
+  const sse = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  await assert.rejects(aggregateCodexResponsesStream(new Response(sse).body!), (error: any) => {
+    assert.equal(error.status, 502);
+    assert.match(error.message, /without a terminal response event/);
+    assert.equal(error.upstream, sse);
+    return true;
+  });
+  await assert.rejects(aggregateCodexResponsesStream(new Response("").body!), /without a terminal response event/);
+});
+
+await runAsync("codex subscription SSE merges partial terminal output without duplicates", async () => {
+  const search = { id: "ws_1", type: "web_search_call", status: "completed" };
+  const message = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] };
+  const finalMessage = { ...message, status: "completed" };
+  const terminalOnly = { id: "msg_2", type: "message", role: "assistant", content: [] };
+  for (const type of ["response.completed", "response.incomplete", "response.done"]) {
+    const status = type === "response.incomplete" ? "incomplete" : "completed";
+    const events = [
+      { type: "response.output_item.done", output_index: 1, item: message },
+      { type: "response.output_item.done", output_index: 0, item: search },
+      { type: "response.output_item.done", output_index: 0, item: search },
+      { type, response: { id: "resp_1", status, output: [finalMessage, terminalOnly], usage: { input_tokens: 2, output_tokens: 1 } } },
+    ];
+    const sse = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+    const aggregated = await aggregateCodexResponsesStream(new Response(sse).body!);
+    assert.deepEqual(aggregated.output, [search, finalMessage, terminalOnly]);
+    assert.equal(aggregated.status, status);
+    assert.deepEqual(aggregated.usage, { input_tokens: 2, output_tokens: 1 });
+  }
+});
+
 await runAsync("model bodyExpression rewrites passthrough upstream request body", async () => {
   let upstreamBody: any;
   await withHTTPServer(async (req, res) => {
@@ -4306,6 +4598,93 @@ await runAsync("status store lists only model names with recent buckets", async 
   store.recordAttempt("alpha", now);
 
   assert.deepEqual(await store.listModelNames(now), ["alpha", "beta"]);
+});
+
+run("sqlite configuration uses generic URL and optional token", () => {
+  assert.equal(resolveSqliteConfig({}), undefined);
+  assert.deepEqual(resolveSqliteConfig({ NANOLLM_SQLITE_URL: "http://sqld:8080/app/" }), { url: "http://sqld:8080/app/", authToken: undefined });
+  assert.throws(() => resolveSqliteConfig({ NANOLLM_SQLITE_AUTH_TOKEN: "test-token" }), /NANOLLM_SQLITE_URL/);
+  assert.equal(resolveSqliteConfig({ NANOLLM_TURSO_DATABASE_URL: "https://old.example.com" }), undefined);
+});
+
+await runAsync("remote sqlite sends optional bearer token and preserves database URL path", async () => {
+  const requests: { path: string | undefined; token: string | undefined }[] = [];
+  await withHTTPServer((req, res) => {
+    requests.push({ path: req.url, token: req.headers.authorization });
+    req.resume();
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ baton: null, base_url: null, results: [
+        { type: "ok", response: { type: "execute", result: { cols: [{ name: "value", decltype: null }], rows: [[{ type: "integer", value: "1" }]], affected_row_count: 0, last_insert_rowid: null } } },
+        { type: "ok", response: { type: "close" } },
+      ] }));
+    });
+  }, async (baseURL) => {
+    for (const authToken of [undefined, "test-token"]) {
+      const storage = await openSqliteStorage("unused.sqlite3", { url: `${baseURL}/app/`, authToken });
+      try {
+        assert.equal(storage.driver, "remote");
+        assert.equal((await storage.client.execute("SELECT 1 AS value")).rows[0].value, 1);
+      } finally { storage.client.close(); }
+    }
+  });
+  assert.equal(requests[0].path, "/app/v2/pipeline");
+  assert.equal(requests[0].token, undefined);
+  assert.equal(requests[1].token, undefined);
+  assert.equal(requests[2].token, "Bearer test-token");
+  assert.equal(requests[3].token, "Bearer test-token");
+});
+
+await runAsync("remote sqlite retries wake probes but sends a counter increment only once", async () => {
+  let probes = 0;
+  let writes = 0;
+  let failWrite = false;
+  const seen: string[] = [];
+  await withHTTPServer((req, res) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const pipeline = JSON.parse(body);
+      const sql = pipeline.requests[0].stmt.sql as string;
+      seen.push(sql);
+      if (sql === "SELECT 1") {
+        probes++;
+        if (probes <= 2) { res.statusCode = 502; res.end("Waking up"); return; }
+      } else {
+        writes++;
+        if (failWrite) { res.statusCode = 502; res.end("Result unknown"); return; }
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ baton: null, base_url: null, results: [
+        { type: "ok", response: { type: "execute", result: { cols: [], rows: [], affected_row_count: 1, last_insert_rowid: null } } },
+        { type: "ok", response: { type: "close" } },
+      ] }));
+    });
+  }, async baseURL => {
+    const client = createClient({ url: baseURL, fetch: createSqliteWakeFetch(baseURL, undefined, { delayMs: 0, maxAttempts: 3 }) });
+    try {
+      await client.execute("UPDATE counters SET n = n + 1");
+      assert.deepEqual(seen, ["SELECT 1", "SELECT 1", "SELECT 1", "UPDATE counters SET n = n + 1"]);
+      assert.equal(writes, 1);
+      failWrite = true;
+      await assert.rejects(client.execute("UPDATE counters SET n = n + 1"));
+      assert.equal(writes, 2, "An uncertain write must not be retried");
+    } finally { client.close(); }
+  });
+});
+
+await runAsync("remote sqlite never sends the write when wake probes are exhausted", async () => {
+  let requests = 0;
+  await withHTTPServer((req, res) => {
+    requests++;
+    req.resume();
+    req.on("end", () => { res.statusCode = 503; res.end("Unavailable"); });
+  }, async baseURL => {
+    const client = createClient({ url: baseURL, fetch: createSqliteWakeFetch(baseURL, undefined, { delayMs: 0, maxAttempts: 3 }) });
+    try { await assert.rejects(client.execute("UPDATE counters SET n = n + 1")); }
+    finally { client.close(); }
+  });
+  assert.equal(requests, 3);
 });
 
 await runAsync("sqlite status store persists sparse buckets for a month while UI series stays at 6 hours", async () => {

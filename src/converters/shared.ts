@@ -276,6 +276,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+export function normalizeReasoningEffort(effort: string | null | undefined): string | null {
+  return effort === "ultra" ? "max" : effort ?? null;
+}
+
 export function normalizeReasoningEffortFromBudget(thinkingBudgetTokens: number | null | undefined): string | null {
   if (thinkingBudgetTokens == null) return null;
   if (thinkingBudgetTokens <= 3000) return "low";

@@ -1,6 +1,5 @@
 import { createClient, type Client } from "@libsql/client";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const MIGRATION_STATE_TABLE = "nanollm_migration_state";
@@ -9,16 +8,6 @@ const COPY_BATCH_SIZE = 25;
 export interface TursoAutoMigrationConfig {
   sourcePath: string;
   migrationKey: string;
-}
-
-export function resolveTursoAutoMigrationConfig(env: NodeJS.ProcessEnv = process.env): TursoAutoMigrationConfig | undefined {
-  const rawSourcePath = env.NANOLLM_TURSO_AUTO_MIGRATE_FROM;
-  if (!rawSourcePath) return undefined;
-  const sourcePath = resolve(process.cwd(), rawSourcePath);
-  return {
-    sourcePath,
-    migrationKey: `auto-import:${sourcePath}`,
-  };
 }
 
 function quoteIdent(value: string): string {

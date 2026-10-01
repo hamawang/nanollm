@@ -36,6 +36,7 @@ export interface ClaudeSubscriptionCredential {
   subscriptionType?: string | null;
   rateLimitTier?: string | null;
   accountUuid?: string;
+  deviceId?: string;
   email?: string;
   organizationUuid?: string;
   obtainedAt?: number;
@@ -80,7 +81,7 @@ function save(name: string, value: ClaudeSubscriptionCredential) {
   const dir = providerDir();
   const oldPath = credentialPaths.get(name);
   const path = oldPath && dirname(oldPath) === dir ? oldPath : join(dir, `${randomUUID()}.json`);
-  const persisted = { ...value, providerName: name };
+  const persisted = { ...value, deviceId: value.deviceId ?? cache.get(name)?.deviceId, providerName: name };
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(persisted, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, path);
@@ -273,6 +274,16 @@ export async function ensureClaudeSubscriptionCredential(name: string) {
 
 export function getCachedClaudeSubscriptionCredential(name: string) { return load(name); }
 
+/** Persist one device identity per subscription provider, including legacy credentials. */
+export function getOrCreateClaudeSubscriptionDeviceId(name: string): string {
+  const credential = load(name);
+  if (!credential) throw new Error(`Claude subscription provider '${name}' is not authenticated`);
+  if (typeof credential.deviceId === "string" && /^[a-f0-9]{64}$/i.test(credential.deviceId)) return credential.deviceId;
+  const deviceId = randomBytes(32).toString("hex");
+  save(name, { ...credential, deviceId });
+  return deviceId;
+}
+
 /**
  * Headers for the Claude model list. `identityHeaders` should carry the Claude Code fingerprint and betas
  * (applyClaudeSubscriptionHeaders): Claude Code OAuth credentials are scoped to Claude Code, and sub2api sends
@@ -354,6 +365,8 @@ export function bootstrapClaudeSubscriptionProviders(providers: CustomProviderCo
   for (const name of subscriptionProviders.keys()) {
     const value = load(name);
     if (!value) { console.warn(`[CLAUDE SUBSCRIPTION] ${name}: no credential file; sign in from the admin page`); continue; }
+    // Backfill legacy credential files once; keep the identity across restarts.
+    getOrCreateClaudeSubscriptionDeviceId(name);
     if (value.expiresAt > Date.now() + REFRESH_BUFFER_MS) { schedule(name, value); continue; }
     if (value.refreshToken) void refresh(name).catch((e) => console.error(`[CLAUDE SUBSCRIPTION] refresh failed for ${name}:`, e));
   }
